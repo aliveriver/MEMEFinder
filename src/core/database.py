@@ -238,6 +238,75 @@ class ImageDatabase:
             })
         conn.close()
         return results
+
+    def get_images_count(self, processed: int = None, keyword: str = "", emotion: str = "") -> int:
+        """获取符合条件的图片总数（用于分页）
+
+        Args:
+            processed: 1 for 已处理，0 为未处理，None 表示全部
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        query = "SELECT COUNT(*) FROM images WHERE 1=1"
+        params = []
+        if processed is not None:
+            query += " AND processed = ?"
+            params.append(processed)
+        if keyword:
+            query += " AND (filtered_text LIKE ? OR ocr_text LIKE ?)"
+            params.extend([f"%{keyword}%", f"%{keyword}%"])
+        if emotion:
+            query += " AND emotion = ?"
+            params.append(emotion)
+
+        cursor.execute(query, params)
+        total = cursor.fetchone()[0]
+        conn.close()
+        return total
+
+    def get_images_page(self, page: int = 1, page_size: int = 20, processed: int = None,
+                        keyword: str = "", emotion: str = "") -> List[Dict]:
+        """分页获取图片数据，返回指定页的记录列表
+
+        Args:
+            page: 页码，从1开始
+            page_size: 每页条数
+            processed: 1/0/None 同 get_images_count
+        """
+        offset = max(0, (page - 1) * page_size)
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        query = "SELECT id, file_path, filtered_text, emotion, emotion_positive, emotion_negative, processed FROM images WHERE 1=1"
+        params = []
+        if processed is not None:
+            query += " AND processed = ?"
+            params.append(processed)
+        if keyword:
+            query += " AND (filtered_text LIKE ? OR ocr_text LIKE ?)"
+            params.extend([f"%{keyword}%", f"%{keyword}%"])
+        if emotion:
+            query += " AND emotion = ?"
+            params.append(emotion)
+
+        query += " ORDER BY added_time DESC LIMIT ? OFFSET ?"
+        params.extend([page_size, offset])
+
+        cursor.execute(query, params)
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                'id': row[0],
+                'file_path': row[1],
+                'text': row[2],
+                'emotion': row[3],
+                'pos_score': row[4],
+                'neg_score': row[5],
+                'processed': bool(row[6])
+            })
+        conn.close()
+        return results
     
     # ==================== 统计信息 ====================
     
