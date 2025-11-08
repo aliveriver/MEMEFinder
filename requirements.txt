@@ -1,0 +1,17 @@
+--index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/
+
+paddlepaddle==3.2.0
+paddleocr>=3.0.0
+opencv-python>=4.8
+pillow>=10.0
+numpy>=1.24,<2.1
+
+# GUI相关
+flask>=2.3.0
+flask-cors>=4.0.0
+
+# 情绪分析（PaddleNLP包含Senta）
+paddlenlp>=2.6.0
+
+# 其他工具
+python-dateutil>=2.8.0
