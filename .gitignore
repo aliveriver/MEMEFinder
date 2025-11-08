@@ -1,0 +1,50 @@
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Project-specific outputs and large binaries
+imgs/
+out/
+*.pdf
+*.zip
+*.tar.gz
+
+# Databases and local data
+*.db
+meme_finder.db
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Misc
+pip-wheel-metadata/
+coverage.xml
+htmlcov/
+.report/
+
+# Keep track of local environment files
+.env
+
+# End of file
