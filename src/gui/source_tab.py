@@ -86,6 +86,26 @@ class SourceTab:
         """添加图源文件夹"""
         folder = filedialog.askdirectory(title="选择图源文件夹")
         if folder:
+            # 标准化为绝对路径
+            folder = os.path.abspath(folder)
+
+            # 检查是否已有已添加的目录包含当前选择的目录（即父目录已被添加）
+            try:
+                sources = self.db.get_sources()
+            except Exception:
+                sources = []
+
+            for s in sources:
+                try:
+                    src_path = os.path.abspath(s.get('folder_path') or '')
+                    # 相同路径或 src_path 是 folder 的父目录
+                    if src_path and (src_path == folder or os.path.commonpath([src_path, folder]) == src_path):
+                        messagebox.showwarning("警告", f"该文件夹已被包含于已添加的图源：{src_path}")
+                        return
+                except Exception:
+                    # os.path.commonpath 在不同磁盘可能抛异常，忽略并继续检查下一项
+                    continue
+
             if self.db.add_source(folder):
                 messagebox.showinfo("成功", f"已添加图源：{folder}")
                 self.refresh_sources()
@@ -185,6 +205,21 @@ class SourceTab:
         self.refresh_sources()
         self.update_statistics()
         messagebox.showinfo("完成", f"扫描完成！\n发现新图片: {total_new} 张")
+
+        # 仅在发现新图片时自动切换到图片处理标签页
+        if total_new > 0:
+            try:
+                # 先按标签文本查找（更稳健）
+                for tab_id in self.parent.tabs():
+                    try:
+                        if self.parent.tab(tab_id, 'text') == '图片处理':
+                            self.parent.select(tab_id)
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                # 忽略切换错误，不影响扫描结果
+                pass
     
     def update_statistics(self):
         """更新统计信息"""
