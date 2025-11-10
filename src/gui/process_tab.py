@@ -73,6 +73,12 @@ class ProcessTab:
             messagebox.showinfo("提示", "没有待处理的图片")
             return
         
+        # 标记应用状态为正在运行（用于断点恢复）
+        try:
+            self.db.set_app_state('processing_state', 'running')
+        except Exception:
+            pass
+         
         self.processing = True
         self.log_message("=" * 50)
         self.log_message("准备开始处理图片...")
@@ -89,12 +95,20 @@ class ProcessTab:
         if self.processing:
             self.processing = False
             self.log_message("[暂停] 处理已暂停")
-    
+            try:
+                self.db.set_app_state('processing_state', 'paused')
+            except Exception:
+                pass
+     
     def stop_processing(self):
         """停止处理"""
         if self.processing:
             self.processing = False
             self.log_message("[停止] 处理已停止")
+            try:
+                self.db.set_app_state('processing_state', 'idle')
+            except Exception:
+                pass
     
     def process_images_thread(self):
         """处理图片的线程"""
@@ -164,6 +178,10 @@ class ProcessTab:
             
             # 完成
             self.processing = False
+            try:
+                self.db.set_app_state('processing_state', 'idle')
+            except Exception:
+                pass
             self.progress_var.set(100)
             self.progress_label.config(text=f"处理完成: 成功 {processed_count}, 失败 {error_count}")
             self.log_message("=" * 50)
@@ -174,6 +192,10 @@ class ProcessTab:
             
         except Exception as e:
             self.processing = False
+            try:
+                self.db.set_app_state('processing_state', 'idle')
+            except Exception:
+                pass
             self.log_message(f"[错误] 处理线程异常: {e}")
             import traceback
             self.log_message(traceback.format_exc())
