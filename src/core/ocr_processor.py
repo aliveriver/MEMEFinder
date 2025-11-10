@@ -8,6 +8,7 @@
 import re
 import tempfile
 import gc
+import os
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
@@ -38,7 +39,7 @@ class OCRProcessor:
             lang: 语言，默认'ch'（中文）
             use_gpu: 是否使用GPU
             det_side: 检测侧边长度，默认1536（可降低以减少内存）
-            use_senta: 是否使用 PaddleNLP Senta 进行情绪分析，默认True（启用深度学习模型，如不可用则回退到关键词方法）
+            use_senta: 是否使用情绪分析模型，默认True（优先使用 SnowNLP，快速且准确）
         """
         logger.info("=" * 60)
         logger.info("初始化 OCR 处理器...")
@@ -447,55 +448,63 @@ class OCRProcessor:
 
         return text
 
-    # ==================== Senta 情绪分析（可选）====================
+    # ==================== 情绪分析模型初始化（支持多种方案）====================
 
     def _init_senta(self):
         """
-        初始化 PaddleNLP Senta 情绪分析模型
-        如果初始化失败，将回退到关键词方法
+        初始化情绪分析模型
         
-        注意：不再使用 bilstm 模型（存在兼容性问题），改用默认的 uie 模型
+        支持的模型（按优先级尝试）：
+        1. SnowNLP（轻量级，中文情感分析）
+        2. TextBlob（英文情感分析，如果有英文需求）
+        3. 关键词方法（默认回退方案）
         """
+        # 方案1：尝试使用 SnowNLP（推荐，轻量且准确）
         try:
-            from paddlenlp import Taskflow
+            from snownlp import SnowNLP
+            logger.info("正在初始化 SnowNLP 情绪分析模型...")
             
-            logger.info("正在初始化 PaddleNLP Senta 情绪分析模型...")
+            # 测试模型是否正常工作
+            test = SnowNLP("这是一个测试")
+            _ = test.sentiments
             
-            # 检查本地模型路径
-            project_root = Path(__file__).parent.parent.parent
-            models_dir = project_root / "models" / "senta"
-            models_dir.mkdir(parents=True, exist_ok=True)
-            
-            # 直接使用默认模型（更稳定）
-            # PaddleNLP 的 sentiment_analysis 默认使用 skep_ernie_1.0_large_ch 或更轻量的版本
-            try:
-                logger.info(f"模型将缓存到: {models_dir}")
-                self._senta = Taskflow(
-                    "sentiment_analysis",
-                    # 不指定 model 参数，使用默认模型（自动选择合适的模型）
-                    # task_path=str(models_dir)  # 可选：指定缓存路径
-                )
-                self._use_senta = True
-                logger.info("PaddleNLP Senta 初始化完成")
-                
-            except Exception as e:
-                logger.warning(f"Senta 模型初始化失败: {e}")
-                raise
-                
+            self._senta = 'snownlp'
+            self._use_senta = True
+            logger.info("SnowNLP 初始化成功（轻量级中文情感分析）")
+            return
         except ImportError:
-            logger.warning("PaddleNLP 未安装，将使用关键词方法进行情绪分析")
-            logger.warning("如需使用 Senta，请运行: pip install paddlenlp")
-            self._senta = None
-            self._use_senta = False
+            logger.info("SnowNLP 未安装，尝试其他方案...")
+            logger.info("如需使用 SnowNLP，请运行: pip install snownlp")
         except Exception as e:
-            logger.warning(f"PaddleNLP Senta 初始化失败: {e}")
-            logger.warning("将使用关键词方法进行情绪分析")
-            self._senta = None
-            self._use_senta = False
+            logger.warning(f"SnowNLP 初始化失败: {e}")
+
+        # 方案2：尝试使用 TextBlob（适合英文）
+        try:
+            from textblob import TextBlob
+            logger.info("正在初始化 TextBlob 情绪分析模型...")
+            
+            # 测试模型
+            test = TextBlob("This is a test")
+            _ = test.sentiment.polarity
+            
+            self._senta = 'textblob'
+            self._use_senta = True
+            logger.info("TextBlob 初始化成功（适合英文情感分析）")
+            return
+        except ImportError:
+            logger.info("TextBlob 未安装，尝试其他方案...")
+            logger.info("如需使用 TextBlob，请运行: pip install textblob")
+        except Exception as e:
+            logger.warning(f"TextBlob 初始化失败: {e}")
+
+        # 回退到关键词方法
+        logger.info("将使用关键词方法进行情绪分析（快速且有效）")
+        self._senta = None
+        self._use_senta = False
 
     def _senta_analyze(self, text: str) -> Tuple[str, float, float]:
         """
-        使用 PaddleNLP Senta 进行情绪分析
+        使用深度学习模型进行情绪分析
 
         Args:
             text: 文本内容
@@ -510,39 +519,51 @@ class OCRProcessor:
             if not text or len(text.strip()) == 0:
                 return ('未分类', 0.0, 0.0)
 
-            # 调用 Senta 进行情绪分析
-            result = self._senta(text)
-            
-            if not result:
-                return ('中性', 0.5, 0.5)
-
-            # 解析结果
-            item = result[0] if isinstance(result, list) else result
-            
-            if isinstance(item, dict):
-                label = item.get('label', '').lower()
-                score = float(item.get('score', 0.0))
+            # 方案1：使用 SnowNLP
+            if self._senta == 'snownlp':
+                from snownlp import SnowNLP
+                s = SnowNLP(text)
+                score = s.sentiments  # 返回 0-1 之间的分数，越接近1越积极
                 
-                # PaddleNLP Senta 返回格式：
-                # {'label': 'positive', 'score': 0.9xxx} 或 {'label': 'negative', 'score': 0.9xxx}
-                if 'pos' in label or label == '1':
-                    # 正向情绪
-                    pos_score = min(0.99, max(0.5, score))
-                    neg_score = 1.0 - pos_score
-                    return ('正向', round(pos_score, 4), round(neg_score, 4))
-                elif 'neg' in label or label == '0':
-                    # 负向情绪
-                    neg_score = min(0.99, max(0.5, score))
-                    pos_score = 1.0 - neg_score
-                    return ('负向', round(pos_score, 4), round(neg_score, 4))
+                # 转换为正向/负向分数
+                pos_score = round(score, 4)
+                neg_score = round(1.0 - score, 4)
+                
+                # 判断情绪类别
+                if score > 0.6:
+                    emotion = '正向'
+                elif score < 0.4:
+                    emotion = '负向'
                 else:
-                    # 中性或未知
-                    return ('中性', 0.5, 0.5)
-            
-            return ('中性', 0.5, 0.5)
+                    emotion = '中性'
+                
+                return (emotion, pos_score, neg_score)
+
+            # 方案2：使用 TextBlob
+            elif self._senta == 'textblob':
+                from textblob import TextBlob
+                blob = TextBlob(text)
+                polarity = blob.sentiment.polarity  # 返回 -1 到 1 之间的分数
+                
+                # 转换为 0-1 区间
+                normalized = (polarity + 1) / 2  # 映射到 0-1
+                pos_score = round(normalized, 4)
+                neg_score = round(1.0 - normalized, 4)
+                
+                # 判断情绪类别
+                if polarity > 0.2:
+                    emotion = '正向'
+                elif polarity < -0.2:
+                    emotion = '负向'
+                else:
+                    emotion = '中性'
+                
+                return (emotion, pos_score, neg_score)
+
+            return None
 
         except Exception as e:
-            logger.warning(f"Senta 分析失败: {e}，回退到关键词方法")
+            logger.warning(f"情绪分析模型失败: {e}，回退到关键词方法")
             return None
 
     # ==================== 情绪分析 ====================

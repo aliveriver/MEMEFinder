@@ -10,8 +10,22 @@ numpy>=1.24,<2.1
 flask>=2.3.0
 flask-cors>=4.0.0
 
-# 情绪分析（PaddleNLP包含Senta）
-paddlenlp>=2.6.0
+# 情绪分析（多种方案可选）
+# paddlenlp>=2.6.0  # PaddleNLP Senta（存在模型转换问题，不推荐）
+snownlp>=0.12.3     # SnowNLP（推荐，轻量级中文情感分析）
+# textblob>=0.17.1  # TextBlob（可选，适合英文情感分析）
 
 # 其他工具
 python-dateutil>=2.8.0
+
+# ==================== 可选OCR引擎 ====================
+# 根据需要取消注释安装以下依赖
+
+# EasyOCR - 支持80+语言，准确率高
+# easyocr
+
+# Tesseract OCR - 老牌开源OCR，需要先安装 Tesseract 程序
+# pytesseract
+
+# 百度OCR API - 在线服务，高准确率
+# baidu-aip
