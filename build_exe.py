@@ -42,6 +42,7 @@ a = Analysis(
         ('src', 'src'),
         ('README.md', '.'),
     ],
+    collect_data=['paddlex'],  # 收集 PaddleX 的数据文件（包括 .version）
     hiddenimports=[
         'paddleocr',
         'paddlenlp',
@@ -51,13 +52,29 @@ a = Analysis(
         'numpy',
         'tkinter',
         'sqlite3',
+        'unittest',  # 修复 PaddlePaddle 依赖
+        'unittest.mock',
+        'doctest',
         'flask',
         'flask_cors',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # 开发工具
+        'pytest', 'pytest_cov', 'coverage', 'hypothesis',
+        # 文档工具
+        'sphinx', 'docutils', 'jinja2',
+        # Jupyter相关
+        'IPython', 'jupyter', 'notebook', 'nbconvert', 'nbformat',
+        # 数据科学库（pandas需要保留，PaddleX依赖）
+        'matplotlib', 'scipy', 'seaborn',
+        # Web框架（保留flask因为可能需要）
+        'django', 'tornado', 'aiohttp',
+        # 其他不需要的
+        'PIL.ImageQt', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

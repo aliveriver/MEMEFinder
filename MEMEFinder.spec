@@ -1,39 +1,24 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
 
-block_cipher = None
+datas = [('src', 'src'), ('README.md', '.')]
+datas += collect_data_files('paddlex')
 
-# 分析所有的依赖
+
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('src', 'src'),
-        ('README.md', '.'),
-    ],
-    hiddenimports=[
-        'paddleocr',
-        'paddlenlp',
-        'paddle',
-        'cv2',
-        'PIL',
-        'numpy',
-        'tkinter',
-        'sqlite3',
-        'flask',
-        'flask_cors',
-    ],
+    datas=datas,
+    hiddenimports=['unittest', 'unittest.mock', 'doctest', 'paddleocr', 'paddlenlp', 'paddle', 'cv2', 'PIL', 'numpy', 'tkinter', 'sqlite3'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
+    excludes=['matplotlib', 'scipy', 'jupyter', 'IPython', 'pytest', 'sphinx', 'notebook'],
     noarchive=False,
+    optimize=0,
 )
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
@@ -45,19 +30,16 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,  # 不显示控制台窗口
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # 如果有图标可以在这里指定
 )
-
 coll = COLLECT(
     exe,
     a.binaries,
-    a.zipfiles,
     a.datas,
     strip=False,
     upx=True,
