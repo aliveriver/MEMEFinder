@@ -1,275 +1,149 @@
-# 🎭 MEMEFinder - 表情包智能管理工具
 
-基于 OCR 和情绪分析的表情包搜索与管理系统
+# MEMEFinder — 表情包查找器
+
+基于 **OCR** 和 **情绪分析** 的桌面表情包管理与搜索工具。  
+支持批量扫描图片、MD5 去重、OCR 文本提取、情绪分析（可选），并提供 **Windows GUI** 与打包脚本，便于发布为可执行程序。
 
 ---
 
-## ✨ 主要特性
+## 📁 主要文件与目录结构
 
-- 🔍 **智能OCR识别**: 基于PaddleOCR的高精度文字识别
-- 😊 **情绪分析**: 自动分类表情包情绪（正向/负向/中性）
-- 🎯 **高效搜索**: 支持关键词和情绪筛选
-- 📊 **批量处理**: 快速扫描和处理大量图片
-- 💾 **数据持久化**: SQLite数据库存储，支持断点续传
-- 🎨 **友好界面**: 简洁直观的图形界面
+| 文件/目录 | 说明 |
+|------------|------|
+| `main.py` | 程序入口（启动 GUI） |
+| `src/` | 源代码目录（含 `core/`, `gui/`, `utils/`） |
+| `download_models.py` | 模型下载脚本 |
+| `build_exe.py` / `一键打包_无清理.bat` | 打包为可执行程序 |
+| `requirements.txt` | Python 依赖列表 |
+| `docs/` | 使用说明、打包与结构文档 |
+| `imgs/` | 示例图片 |
+| `models/` | 模型文件目录（运行或下载后填充） |
+| `logs/` | 运行日志 |
+| Windows 辅助脚本 | `安装依赖.bat`、`启动程序.bat`、`创建安装程序.bat` 等 |
+
+---
+
+## ✨ 主要功能
+
+- **图源管理**：添加 / 删除 / 启用 / 禁用文件夹，显示添加时间与最后扫描时间  
+- **图片扫描**：递归扫描支持格式（jpg/png/bmp/webp/gif/tiff），自动 MD5 去重与增量扫描  
+- **OCR 识别（可选）**：使用 *PaddleOCR* 提取图片文字并保存到数据库  
+- **情绪分析（可选）**：使用 *PaddleNLP Senta* 对提取文本进行情绪分类  
+- **数据存储**：基于 SQLite 数据库，持久化图源与图片信息  
+- **GUI 界面**：基于 tkinter，包含三个标签页：
+  - 图源管理  
+  - 图片处理  
+  - 图片搜索  
+- **打包支持**：自带 PyInstaller 打包脚本与批处理，生成独立 Windows 可执行包  
 
 ---
 
 ## 🚀 快速开始
 
-### 方式一: 一键安装（推荐）
+### 源码运行
 
-```bash
-# 双击运行
-完整安装.bat
-```
+1. 安装依赖（在 PowerShell 中执行）：
+   ```bash
+   pip install -r requirements.txt
+    ````
 
-### 方式二: 手动安装
+2. （可选）下载模型：
 
-```bash
-# 1. 安装依赖
-pip install -r requirements.txt
+   ```bash
+   python download_models.py
+   ```
 
-# 2. 下载OCR模型
-python download_ocr_models.py
+   或运行发布包内的 **下载模型.bat**
 
-# 3. (可选) 下载情绪分析模型
-python download_senta_models.py
+3. 启动程序：
 
-# 4. 启动程序
-python main.py
-```
+   ```bash
+   python main.py
+   ```
 
----
-
-## 📖 使用说明
-
-### 1. 添加图源
-
-- 点击"图源管理"标签
-- 点击"添加文件夹"，选择包含表情包的文件夹
-- 系统会自动扫描文件夹中的图片
-
-### 2. 处理图片
-
-- 切换到"处理"标签
-- 点击"开始处理"
-- 程序会自动进行OCR识别和情绪分析
-
-### 3. 搜索表情包
-
-- 切换到"搜索"标签
-- 输入关键词或选择情绪类型
-- 点击搜索结果可以打开图片
+   或双击 **启动程序.bat**
 
 ---
 
-## ⚙️ 性能优化
+### 可执行包运行
 
-### 内存优化
-- ✅ 连接池管理数据库连接
-- ✅ 批量操作减少数据库开销
-- ✅ 自动垃圾回收释放内存
-- ✅ 图片资源及时释放
-
-### 存储优化
-- ✅ 数据库VACUUM优化
-- ✅ 旧数据清理功能
-- ✅ 模型缓存管理
-
-### 性能提升
-- 批量插入比单条插入快 **34倍**
-- 批量更新比单条更新快 **40倍**
-- 内存占用降低 **60-68%**
-
-详见: [性能优化指南](docs/OPTIMIZATION_GUIDE.md)
+1. 解压发布包 `dist/MEMEFinder/`
+2. **首次运行前** 建议执行 `下载模型.bat` 下载模型文件
+3. 双击 `MEMEFinder.exe` 启动程序
 
 ---
 
-## 🛠️ 维护工具
+## 🧭 基本使用流程
 
-### 数据库维护
-
-```bash
-# 方式一: 使用批处理脚本
-数据库维护.bat
-
-# 方式二: 使用命令行
-python db_maintenance.py backup      # 备份数据库
-python db_maintenance.py vacuum      # 优化数据库
-python db_maintenance.py stats       # 查看统计
-python db_maintenance.py full        # 完整维护
-```
-
-### 缓存清理
-
-```bash
-# 清理Senta模型缓存
-清理Senta模型缓存.bat
-
-# 或使用PowerShell
-清理Senta缓存.ps1
-```
+1. 打开「图源管理」 → 点击「添加图源文件夹」，选择包含表情包的目录（可多选）
+2. 点击「扫描新图片」进行增量扫描（自动去重）
+3. 切换到「图片处理」运行 OCR / 情绪分析任务（可暂停、停止、查看进度）
+4. 在「图片搜索」中通过关键词或情绪筛选查看结果，双击可打开图片或所在文件夹
 
 ---
 
-## 📊 系统要求
+## 🧩 开发与项目结构
 
-### 最低配置
-- **操作系统**: Windows 10+
-- **Python**: 3.8+
-- **内存**: 4GB
-- **磁盘空间**: 2GB (含模型)
-
-### 推荐配置
-- **操作系统**: Windows 10/11
-- **Python**: 3.9+
-- **内存**: 8GB+
-- **磁盘空间**: 5GB+
-- **GPU**: 支持CUDA的显卡（可选，加速OCR）
-
----
-
-## 📁 项目结构
-
-```
-MEMEFinder/
-├── main.py                   # 主程序入口
-├── meme_finder_gui.py       # GUI界面
-├── db_maintenance.py        # 数据库维护工具
-├── requirements.txt         # Python依赖
-├── src/
-│   ├── core/
-│   │   ├── database.py      # 数据库管理（优化版）
-│   │   ├── ocr_processor.py # OCR处理器（优化版）
-│   │   └── scanner.py       # 文件扫描器
-│   ├── gui/
-│   │   ├── main_window.py   # 主窗口
-│   │   ├── source_tab.py    # 图源管理
-│   │   ├── process_tab.py   # 处理标签
-│   │   └── search_tab.py    # 搜索标签
-│   └── utils/
-│       ├── logger.py         # 日志系统
-│       └── resource_monitor.py # 资源监控
-├── docs/
-│   ├── OPTIMIZATION_GUIDE.md # 性能优化指南
-│   ├── QUICKSTART.md         # 快速开始
-│   └── TROUBLESHOOTING.md    # 故障排查
-└── models/                   # 模型文件目录
-```
+    src/
+    ├── core/            # 核心逻辑
+    │   ├── database.py  # 数据库管理
+    │   ├── scanner.py   # 文件扫描
+    │   └── ocr_processor.py  # OCR + 情绪分析
+    ├── gui/             # 图形界面
+    │   ├── main_window.py
+    │   ├── source_tab.py
+    │   ├── process_tab.py
+    │   └── search_tab.py
+    └── utils/           # 工具模块（日志与资源监控）
 
 ---
 
-## 🔧 配置说明
+## 🧱 打包与发布
 
-### OCR 配置
-```python
-# 在 src/core/ocr_processor.py 中调整
-OCRProcessor(
-    lang='ch',           # 语言: ch=中文, en=英文
-    use_gpu=False,       # 是否使用GPU
-    det_side=1536,       # 检测分辨率 (降低可减少内存)
-    use_senta=True       # 是否使用Senta情绪分析
-)
-```
+* 使用内置脚本或批处理打包：
 
-### 数据库配置
-```python
-# 在 src/core/database.py 中调整
-ImageDatabase(
-    db_path='meme_finder.db',
-    pool_size=5          # 连接池大小
-)
-```
+  ```bash
+    python build_exe.py
 
-### 批处理大小
-```python
-# 根据可用内存调整
-BATCH_SIZE = 50   # 4GB内存
-BATCH_SIZE = 100  # 8GB内存
-BATCH_SIZE = 200  # 16GB+内存
-```
+    或运行 **一键打包_无清理.bat**
+* 发布前可运行 **强制清理.bat** 清除旧构建
+
+* 打包输出位于 `dist/MEMEFinder/`
+
+* 可使用 **Inno Setup** 生成安装程序（相关脚本在 `installer/` 目录中）
 
 ---
 
-## 📝 日志系统
+## 🧰 常见问题（FAQ）
 
-### 日志位置
-- 日志文件保存在 `logs/` 目录
-- 文件名格式: `meme_finder_YYYYMMDD.log`
-
-### 日志级别
-- **DEBUG**: 详细调试信息
-- **INFO**: 正常运行信息
-- **WARNING**: 警告信息
-- **ERROR**: 错误信息
-
-### 查看日志
-```python
-# 实时查看日志
-tail -f logs/meme_finder_20251110.log  # Linux/Mac
-
-# Windows使用
-Get-Content logs\meme_finder_20251110.log -Wait
-```
+| 问题         | 解决方案                                                      |
+| ---------- | --------------------------------------------------------- |
+| 程序无法启动     | 确认 Python 版本 ≥ 3.8 且依赖已安装                                 |
+| OCR/情绪分析异常 | 确认模型已下载至 `models/`（可运行 `download_models.py` 或 `下载模型.bat`） |
+| 打包报错       | 运行清理脚本并确认 PyInstaller 与 Python 版本兼容                       |
 
 ---
 
-## 🐛 故障排查
+## 📚 更多文档
 
-### 常见问题
-
-#### 1. 内存占用过高
-**解决方案**:
-- 降低 `det_side` 参数（如1024）
-- 减少批处理大小
-- 定期执行数据库VACUUM
-- 查看 [性能优化指南](docs/OPTIMIZATION_GUIDE.md)
-
-#### 2. OCR识别失败
-**解决方案**:
-- 运行 `python download_ocr_models.py` 重新下载模型
-- 检查图片格式是否支持（支持jpg, png, bmp等）
-- 查看日志文件了解详细错误
-
-#### 3. Senta模型问题
-**解决方案**:
-- 查看 [Senta问题解决方案](SENTA_问题解决方案.md)
-- 运行清理脚本清除缓存
-- 如不需要深度学习情绪分析，设置 `use_senta=False`
-
-详见: [故障排查文档](docs/TROUBLESHOOTING.md)
+* 使用与教程：[`docs/QUICKSTART.md`](docs/QUICKSTART.md)、[`docs/TUTORIAL.md`](docs/TUTORIAL.md)
+* 打包说明：[`docs/PACKAGING_SUMMARY.md`](docs/PACKAGING_SUMMARY.md)、[`docs/RELEASE_GUIDE.md`](docs/RELEASE_GUIDE.md)
+* 项目结构与概览：[`docs/STRUCTURE.md`](docs/STRUCTURE.md)、[`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md)
 
 ---
 
-## 📚 相关文档
+## 🤝 贡献与反馈
 
-- [快速开始指南](docs/QUICKSTART.md)
-- [性能优化指南](docs/OPTIMIZATION_GUIDE.md)
-- [故障排查](docs/TROUBLESHOOTING.md)
-- [项目总结](docs/PROJECT_SUMMARY.md)
-- [Senta模型指南](docs/SENTA_MODEL_GUIDE.md)
-
----
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
+欢迎提交 Issue 或 Pull Request！
+反馈问题时请附上运行日志（位于 `logs/` 目录中）。
 
 ---
 
 ## 📄 许可证
 
-MIT License
+本项目基于 **MIT License** 开源发布。
+详见 [`LICENSE`](LICENSE)。
 
 ---
 
-## 🙏 致谢
 
-- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) - OCR识别引擎
-- [PaddleNLP](https://github.com/PaddlePaddle/PaddleNLP) - 情绪分析模型
-- [PyQt5](https://www.riverbankcomputing.com/software/pyqt/) - GUI框架
-
----
-
-**最后更新**: 2025-11-10
