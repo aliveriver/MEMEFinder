@@ -11,6 +11,7 @@ __pycache__/
 build/
 dist/
 .eggs/
+*.spec
 
 # Virtual environments
 venv/
@@ -24,6 +25,10 @@ out/
 *.pdf
 *.zip
 *.tar.gz
+
+# Installer output
+installer/installer/
+installer/*.exe
 
 # Databases and local data
 *.db
