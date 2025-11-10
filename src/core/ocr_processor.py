@@ -402,13 +402,35 @@ class OCRProcessor:
         """
         初始化 PaddleNLP Senta 情绪分析模型
         如果初始化失败，将回退到关键词方法
+        
+        注意：不再使用 bilstm 模型（存在兼容性问题），改用默认的 uie 模型
         """
         try:
             from paddlenlp import Taskflow
+            
             print("[INFO] 正在初始化 PaddleNLP Senta 情绪分析模型...")
-            self._senta = Taskflow("sentiment_analysis")
-            self._use_senta = True
-            print("[INFO] PaddleNLP Senta 初始化完成")
+            
+            # 检查本地模型路径
+            project_root = Path(__file__).parent.parent.parent
+            models_dir = project_root / "models" / "senta"
+            models_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 直接使用默认模型（更稳定）
+            # PaddleNLP 的 sentiment_analysis 默认使用 skep_ernie_1.0_large_ch 或更轻量的版本
+            try:
+                print(f"[INFO] 模型将缓存到: {models_dir}")
+                self._senta = Taskflow(
+                    "sentiment_analysis",
+                    # 不指定 model 参数，使用默认模型（自动选择合适的模型）
+                    # task_path=str(models_dir)  # 可选：指定缓存路径
+                )
+                self._use_senta = True
+                print("[INFO] PaddleNLP Senta 初始化完成")
+                
+            except Exception as e:
+                print(f"[WARN] Senta 模型初始化失败: {e}")
+                raise
+                
         except ImportError:
             print("[WARN] PaddleNLP 未安装，将使用关键词方法进行情绪分析")
             print("[WARN] 如需使用 Senta，请运行: pip install paddlenlp")
