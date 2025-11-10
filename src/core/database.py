@@ -60,7 +60,15 @@ class ImageDatabase:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_processed ON images(processed)
         """)
-        
+
+        # 应用状态表（用于持久化断点/恢复状态）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS app_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+
         conn.commit()
         conn.close()
     
@@ -339,3 +347,22 @@ class ImageDatabase:
             'unprocessed': total - processed,
             'emotions': emotions
         }
+    
+    # ==================== 应用状态持久化（断点/恢复） ====================
+
+    def set_app_state(self, key: str, value: str):
+        """设置应用状态键值（持久化）"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("REPLACE INTO app_state (key, value) VALUES (?, ?)", (key, value))
+        conn.commit()
+        conn.close()
+
+    def get_app_state(self, key: str) -> str:
+        """获取应用状态键对应的值，找不到返回空字符串"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM app_state WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row and row[0] is not None else ''
