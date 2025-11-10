@@ -20,7 +20,7 @@ from paddleocr import PaddleOCR
 class OCRProcessor:
     """OCR处理器 - 与 ocr_cli.py 完全兼容的实现"""
 
-    def __init__(self, lang: str = 'ch', use_gpu: bool = False, det_side: int = 1536):
+    def __init__(self, lang: str = 'ch', use_gpu: bool = False, det_side: int = 1536, use_senta: bool = True):
         """
         初始化OCR处理器
 
@@ -28,6 +28,7 @@ class OCRProcessor:
             lang: 语言，默认'ch'（中文）
             use_gpu: 是否使用GPU
             det_side: 检测侧边长度，默认1536
+            use_senta: 是否使用 PaddleNLP Senta 进行情绪分析，默认True（启用深度学习模型，如不可用则回退到关键词方法）
         """
         self.lang = lang
         self.det_side = det_side
@@ -61,6 +62,12 @@ class OCRProcessor:
             text_det_unclip_ratio=2.30,
         )
         print("[INFO] PaddleOCR 初始化完成")
+
+        # 初始化 Senta 情绪分析（可选）
+        self._senta = None
+        self._use_senta = False
+        if use_senta:
+            self._init_senta()
 
     @staticmethod
     def _cuda_compiled() -> bool:
@@ -389,11 +396,87 @@ class OCRProcessor:
 
         return text
 
+    # ==================== Senta 情绪分析（可选）====================
+
+    def _init_senta(self):
+        """
+        初始化 PaddleNLP Senta 情绪分析模型
+        如果初始化失败，将回退到关键词方法
+        """
+        try:
+            from paddlenlp import Taskflow
+            print("[INFO] 正在初始化 PaddleNLP Senta 情绪分析模型...")
+            self._senta = Taskflow("sentiment_analysis")
+            self._use_senta = True
+            print("[INFO] PaddleNLP Senta 初始化完成")
+        except ImportError:
+            print("[WARN] PaddleNLP 未安装，将使用关键词方法进行情绪分析")
+            print("[WARN] 如需使用 Senta，请运行: pip install paddlenlp")
+            self._senta = None
+            self._use_senta = False
+        except Exception as e:
+            print(f"[WARN] PaddleNLP Senta 初始化失败: {e}")
+            print("[WARN] 将使用关键词方法进行情绪分析")
+            self._senta = None
+            self._use_senta = False
+
+    def _senta_analyze(self, text: str) -> Tuple[str, float, float]:
+        """
+        使用 PaddleNLP Senta 进行情绪分析
+
+        Args:
+            text: 文本内容
+
+        Returns:
+            (emotion, pos_score, neg_score) 或 None（如果分析失败）
+        """
+        if not self._use_senta or not self._senta:
+            return None
+
+        try:
+            if not text or len(text.strip()) == 0:
+                return ('未分类', 0.0, 0.0)
+
+            # 调用 Senta 进行情绪分析
+            result = self._senta(text)
+            
+            if not result:
+                return ('中性', 0.5, 0.5)
+
+            # 解析结果
+            item = result[0] if isinstance(result, list) else result
+            
+            if isinstance(item, dict):
+                label = item.get('label', '').lower()
+                score = float(item.get('score', 0.0))
+                
+                # PaddleNLP Senta 返回格式：
+                # {'label': 'positive', 'score': 0.9xxx} 或 {'label': 'negative', 'score': 0.9xxx}
+                if 'pos' in label or label == '1':
+                    # 正向情绪
+                    pos_score = min(0.99, max(0.5, score))
+                    neg_score = 1.0 - pos_score
+                    return ('正向', round(pos_score, 4), round(neg_score, 4))
+                elif 'neg' in label or label == '0':
+                    # 负向情绪
+                    neg_score = min(0.99, max(0.5, score))
+                    pos_score = 1.0 - neg_score
+                    return ('负向', round(pos_score, 4), round(neg_score, 4))
+                else:
+                    # 中性或未知
+                    return ('中性', 0.5, 0.5)
+            
+            return ('中性', 0.5, 0.5)
+
+        except Exception as e:
+            print(f"[WARN] Senta 分析失败: {e}，回退到关键词方法")
+            return None
+
     # ==================== 情绪分析 ====================
 
     def analyze_emotion(self, text: str) -> Tuple[str, float, float]:
         """
-        情绪分析（简单关键词匹配实现）
+        情绪分析：优先使用 PaddleNLP Senta（如果已启用），否则使用关键词匹配
 
         Args:
             text: 文本内容
@@ -402,12 +485,17 @@ class OCRProcessor:
             (emotion, pos_score, neg_score)
             emotion: '正向', '负向', '中性', '未分类'
         """
-        # TODO: 后续可以集成 PaddleNLP Senta 进行更准确的情绪分析
+        # 1. 优先尝试使用 Senta（如果已初始化）
+        if self._use_senta and self._senta:
+            senta_result = self._senta_analyze(text)
+            if senta_result is not None:
+                return senta_result
 
+        # 2. 回退到关键词匹配方法
         if not text or len(text.strip()) < 2:
             return ('未分类', 0.0, 0.0)
 
-        # 临时实现：基于简单关键词判断
+        # 基于简单关键词判断
         positive_keywords = ['开心', '快乐', '高兴', '喜欢', '爱', '好', '棒', '赞', '哈哈', '笑',
                              '牛', '强', '优秀', '完美', '美好', '幸福', '温暖', '可爱']
         negative_keywords = ['难过', '伤心', '生气', '讨厌', '恨', '差', '烂', '哭', '呜呜',
