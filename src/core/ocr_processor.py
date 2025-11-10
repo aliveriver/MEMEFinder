@@ -7,6 +7,7 @@
 
 import re
 import tempfile
+import gc
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
@@ -16,40 +17,61 @@ import paddle
 # PaddleOCR
 from paddleocr import PaddleOCR
 
+# 导入日志和资源监控
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils.logger import get_logger
+from utils.resource_monitor import get_resource_monitor
+
+logger = get_logger()
+resource_monitor = get_resource_monitor()
+
 
 class OCRProcessor:
-    """OCR处理器 - 与 ocr_cli.py 完全兼容的实现"""
+    """OCR处理器 - 与 ocr_cli.py 完全兼容的实现（优化版）"""
 
-    def __init__(self, lang: str = 'ch', use_gpu: bool = False, det_side: int = 1536):
+    def __init__(self, lang: str = 'ch', use_gpu: bool = False, det_side: int = 1536, use_senta: bool = True):
         """
         初始化OCR处理器
 
         Args:
             lang: 语言，默认'ch'（中文）
             use_gpu: 是否使用GPU
-            det_side: 检测侧边长度，默认1536
+            det_side: 检测侧边长度，默认1536（可降低以减少内存）
+            use_senta: 是否使用 PaddleNLP Senta 进行情绪分析，默认True（启用深度学习模型，如不可用则回退到关键词方法）
         """
+        logger.info("=" * 60)
+        logger.info("初始化 OCR 处理器...")
+        
         self.lang = lang
         self.det_side = det_side
+        
+        # 处理计数器（用于定期清理内存）
+        self._process_count = 0
+        self._gc_interval = 10  # 每处理10张图片执行一次垃圾回收
+
+        # 处理计数器（用于定期清理内存）
+        self._process_count = 0
+        self._gc_interval = 10  # 每处理10张图片执行一次垃圾回收
 
         # 设置设备
         if use_gpu:
             try:
                 if self._cuda_compiled():
                     paddle.set_device('gpu')
-                    print("[INFO] 使用GPU进行OCR识别")
+                    logger.info("使用 GPU 进行 OCR 识别")
                 else:
                     paddle.set_device('cpu')
-                    print("[WARN] GPU不可用，使用CPU")
+                    logger.warning("GPU 不可用，使用 CPU")
             except Exception as e:
                 paddle.set_device('cpu')
-                print(f"[WARN] GPU设置失败({e})，使用CPU")
+                logger.warning(f"GPU 设置失败 ({e})，使用 CPU")
         else:
             paddle.set_device('cpu')
-            print("[INFO] 使用CPU进行OCR识别")
+            logger.info("使用 CPU 进行 OCR 识别")
 
         # 初始化OCR（与 ocr_cli.py 完全一致的配置）
-        print(f"[INFO] 正在初始化 PaddleOCR (lang={lang}, det_side={det_side})...")
+        logger.info(f"正在初始化 PaddleOCR (lang={lang}, det_side={det_side})...")
         self.ocr = PaddleOCR(
             lang=lang,
             use_textline_orientation=True,
@@ -60,7 +82,18 @@ class OCRProcessor:
             text_det_box_thresh=0.30,
             text_det_unclip_ratio=2.30,
         )
-        print("[INFO] PaddleOCR 初始化完成")
+        logger.info("PaddleOCR 初始化完成")
+
+        # 初始化 Senta 情绪分析（可选）
+        self._senta = None
+        self._use_senta = False
+        if use_senta:
+            self._init_senta()
+        
+        # 记录初始化后的资源状态
+        resource_monitor.log_resource_status()
+        logger.info("OCR 处理器初始化完成")
+        logger.info("=" * 60)
 
     @staticmethod
     def _cuda_compiled() -> bool:
@@ -92,17 +125,34 @@ class OCRProcessor:
             }
         """
         try:
+            # 定期执行垃圾回收以释放内存
+            self._process_count += 1
+            if self._process_count % self._gc_interval == 0:
+                freed = resource_monitor.force_garbage_collection()
+                logger.debug(f"已处理 {self._process_count} 张图片，执行垃圾回收")
+            
+            # 检查内存使用情况
+            if self._process_count % 5 == 0:
+                mem_usage = resource_monitor.get_memory_usage()
+                logger.debug(f"当前内存使用: {mem_usage['rss_mb']:.2f} MB ({mem_usage['percent']:.1f}%)")
+            
+            logger.debug(f"开始处理图片: {image_path.name}")
+            
             # 1. OCR识别（使用 ocr_cli.py 的实现）
             ocr_result = self._ocr_with_padding(image_path, pad_ratio)
 
             # 2. 提取文本
             ocr_text = self._extract_text(ocr_result)
+            logger.debug(f"OCR识别完成，提取到 {len(ocr_text)} 字符")
 
             # 3. 过滤文本
             filtered_text = self.filter_text(ocr_text)
+            if filtered_text:
+                logger.debug(f"文本过滤完成: {filtered_text[:50]}...")
 
             # 4. 情绪分析
             emotion, pos_score, neg_score = self.analyze_emotion(filtered_text)
+            logger.debug(f"情绪分析: {emotion} (正:{pos_score:.2f}, 负:{neg_score:.2f})")
 
             return {
                 'ocr_text': ocr_text,
@@ -112,7 +162,7 @@ class OCRProcessor:
                 'emotion_negative': neg_score
             }
         except Exception as e:
-            print(f"[ERROR] 处理图片失败 {image_path}: {e}")
+            logger.error(f"处理图片失败 {image_path}: {e}")
             return {
                 'ocr_text': '',
                 'filtered_text': '',
@@ -149,21 +199,29 @@ class OCRProcessor:
                 td_ctx.cleanup()
 
     def _make_padded_tmp(self, img_path: Path, pad_ratio: float, pad_color=(0, 0, 0)) -> Tuple:
-        """创建外扩的临时图片（与 ocr_cli.py 一致）"""
-        img = Image.open(img_path).convert("RGB")
-        w, h = img.size
+        """创建外扩的临时图片（与 ocr_cli.py 一致，优化内存使用）"""
+        # 使用 Image.open 上下文管理器，自动关闭文件
+        with Image.open(img_path) as img:
+            # 转换为RGB（如果需要）
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            
+            w, h = img.size
 
-        if pad_ratio <= 0:
-            return None, img_path, (0, 0), (w, h)
+            if pad_ratio <= 0:
+                return None, img_path, (0, 0), (w, h)
 
-        px = max(1, int(round(w * pad_ratio)))
-        py = max(1, int(round(h * pad_ratio)))
-        canvas = Image.new("RGB", (w + 2 * px, h + 2 * py), pad_color)
-        canvas.paste(img, (px, py))
+            px = max(1, int(round(w * pad_ratio)))
+            py = max(1, int(round(h * pad_ratio)))
+            canvas = Image.new("RGB", (w + 2 * px, h + 2 * py), pad_color)
+            canvas.paste(img, (px, py))
 
-        td = tempfile.TemporaryDirectory()
-        outp = Path(td.name) / f"{img_path.stem}.padded.png"
-        canvas.save(outp)
+            td = tempfile.TemporaryDirectory()
+            outp = Path(td.name) / f"{img_path.stem}.padded.png"
+            canvas.save(outp)
+            
+            # 显式释放canvas
+            del canvas
 
         return td, outp, (px, py), (w, h)
 
@@ -389,11 +447,109 @@ class OCRProcessor:
 
         return text
 
+    # ==================== Senta 情绪分析（可选）====================
+
+    def _init_senta(self):
+        """
+        初始化 PaddleNLP Senta 情绪分析模型
+        如果初始化失败，将回退到关键词方法
+        
+        注意：不再使用 bilstm 模型（存在兼容性问题），改用默认的 uie 模型
+        """
+        try:
+            from paddlenlp import Taskflow
+            
+            logger.info("正在初始化 PaddleNLP Senta 情绪分析模型...")
+            
+            # 检查本地模型路径
+            project_root = Path(__file__).parent.parent.parent
+            models_dir = project_root / "models" / "senta"
+            models_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 直接使用默认模型（更稳定）
+            # PaddleNLP 的 sentiment_analysis 默认使用 skep_ernie_1.0_large_ch 或更轻量的版本
+            try:
+                logger.info(f"模型将缓存到: {models_dir}")
+                self._senta = Taskflow(
+                    "sentiment_analysis",
+                    # 不指定 model 参数，使用默认模型（自动选择合适的模型）
+                    # task_path=str(models_dir)  # 可选：指定缓存路径
+                )
+                self._use_senta = True
+                logger.info("PaddleNLP Senta 初始化完成")
+                
+            except Exception as e:
+                logger.warning(f"Senta 模型初始化失败: {e}")
+                raise
+                
+        except ImportError:
+            logger.warning("PaddleNLP 未安装，将使用关键词方法进行情绪分析")
+            logger.warning("如需使用 Senta，请运行: pip install paddlenlp")
+            self._senta = None
+            self._use_senta = False
+        except Exception as e:
+            logger.warning(f"PaddleNLP Senta 初始化失败: {e}")
+            logger.warning("将使用关键词方法进行情绪分析")
+            self._senta = None
+            self._use_senta = False
+
+    def _senta_analyze(self, text: str) -> Tuple[str, float, float]:
+        """
+        使用 PaddleNLP Senta 进行情绪分析
+
+        Args:
+            text: 文本内容
+
+        Returns:
+            (emotion, pos_score, neg_score) 或 None（如果分析失败）
+        """
+        if not self._use_senta or not self._senta:
+            return None
+
+        try:
+            if not text or len(text.strip()) == 0:
+                return ('未分类', 0.0, 0.0)
+
+            # 调用 Senta 进行情绪分析
+            result = self._senta(text)
+            
+            if not result:
+                return ('中性', 0.5, 0.5)
+
+            # 解析结果
+            item = result[0] if isinstance(result, list) else result
+            
+            if isinstance(item, dict):
+                label = item.get('label', '').lower()
+                score = float(item.get('score', 0.0))
+                
+                # PaddleNLP Senta 返回格式：
+                # {'label': 'positive', 'score': 0.9xxx} 或 {'label': 'negative', 'score': 0.9xxx}
+                if 'pos' in label or label == '1':
+                    # 正向情绪
+                    pos_score = min(0.99, max(0.5, score))
+                    neg_score = 1.0 - pos_score
+                    return ('正向', round(pos_score, 4), round(neg_score, 4))
+                elif 'neg' in label or label == '0':
+                    # 负向情绪
+                    neg_score = min(0.99, max(0.5, score))
+                    pos_score = 1.0 - neg_score
+                    return ('负向', round(pos_score, 4), round(neg_score, 4))
+                else:
+                    # 中性或未知
+                    return ('中性', 0.5, 0.5)
+            
+            return ('中性', 0.5, 0.5)
+
+        except Exception as e:
+            logger.warning(f"Senta 分析失败: {e}，回退到关键词方法")
+            return None
+
     # ==================== 情绪分析 ====================
 
     def analyze_emotion(self, text: str) -> Tuple[str, float, float]:
         """
-        情绪分析（简单关键词匹配实现）
+        情绪分析：优先使用 PaddleNLP Senta（如果已启用），否则使用关键词匹配
 
         Args:
             text: 文本内容
@@ -402,12 +558,17 @@ class OCRProcessor:
             (emotion, pos_score, neg_score)
             emotion: '正向', '负向', '中性', '未分类'
         """
-        # TODO: 后续可以集成 PaddleNLP Senta 进行更准确的情绪分析
+        # 1. 优先尝试使用 Senta（如果已初始化）
+        if self._use_senta and self._senta:
+            senta_result = self._senta_analyze(text)
+            if senta_result is not None:
+                return senta_result
 
+        # 2. 回退到关键词匹配方法
         if not text or len(text.strip()) < 2:
             return ('未分类', 0.0, 0.0)
 
-        # 临时实现：基于简单关键词判断
+        # 基于简单关键词判断
         positive_keywords = ['开心', '快乐', '高兴', '喜欢', '爱', '好', '棒', '赞', '哈哈', '笑',
                              '牛', '强', '优秀', '完美', '美好', '幸福', '温暖', '可爱']
         negative_keywords = ['难过', '伤心', '生气', '讨厌', '恨', '差', '烂', '哭', '呜呜',
