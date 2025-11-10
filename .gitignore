@@ -29,6 +29,15 @@ out/
 *.db
 meme_finder.db
 
+# Models (large files, should be downloaded by users)
+models/senta/
+models/**/*.pdparams
+models/**/*.pdiparams
+models/**/*.pdopt
+models/**/*.pdmodel
+models/**/*.onnx
+!models/README.md
+
 # Logs and temp files
 *.log
 *.tmp
