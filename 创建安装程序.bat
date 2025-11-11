@@ -61,10 +61,10 @@ if not exist "dist\MEMEFinder\MEMEFinder.exe" (
     echo ✗ 找不到可执行文件
     echo.
     echo 请先运行打包脚本：
-    echo   一键打包_无清理.bat
+    echo   打包发布版.bat
     echo.
     echo 或者运行：
-    echo   python build_exe.py
+    echo   python build_release.py
     pause
     exit /b 1
 )
