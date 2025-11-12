@@ -29,10 +29,10 @@ def clean_build():
             print(f"删除: {dir_name}/")
             shutil.rmtree(dir_name)
     
-    # 删除 spec 文件
-    for spec in Path('.').glob('*.spec'):
-        print(f"删除: {spec}")
-        spec.unlink()
+    # 不删除 spec 文件，保留配置
+    # for spec in Path('.').glob('*.spec'):
+    #     print(f"删除: {spec}")
+    #     spec.unlink()
     
     print("✓ 清理完成")
 
@@ -41,60 +41,95 @@ def build_exe():
     """使用PyInstaller打包"""
     print_header("开始打包")
     
-    # PyInstaller 命令
-    cmd = [
-        sys.executable, '-m', 'PyInstaller',
-        '--clean',
-        '--noconfirm',
-        '--name=MEMEFinder',
-        '--windowed',
-        
-        # 添加数据文件
-        '--add-data=src;src',
-        '--add-data=README.md;.',
-        '--add-data=paddlex_patch.py;.',  # 添加补丁文件
-        
-        # 关键：收集PaddleX的所有数据文件
-        '--collect-all=paddlex',
-        '--collect-all=paddle',
-        '--collect-all=paddleocr',
-        '--collect-all=paddlenlp',
-        '--collect-all=pypdfium2',
-        '--collect-submodules=paddlex',
-        '--collect-submodules=paddle',
-        '--collect-submodules=paddleocr',
-        '--collect-submodules=paddlenlp',
-        '--collect-submodules=pypdfium2',
-        
-        # 必需的隐藏导入
-        '--hidden-import=unittest',
-        '--hidden-import=unittest.mock',
-        '--hidden-import=doctest',
-        '--hidden-import=paddleocr',
-        '--hidden-import=paddlenlp',
-        '--hidden-import=paddle',
-        '--hidden-import=paddlex',
-        '--hidden-import=paddlex.inference',
-        '--hidden-import=paddlex.inference.pipelines',
-        '--hidden-import=paddlex.inference.pipelines.ocr',
-        '--hidden-import=paddlex.inference.models',
-        '--hidden-import=paddlex.modules',
-        '--hidden-import=cv2',
-        '--hidden-import=PIL',
-        '--hidden-import=numpy',
-        '--hidden-import=pandas',  # PaddleX需要
-        '--hidden-import=tkinter',
-        '--hidden-import=sqlite3',
-        '--hidden-import=sklearn',
-        '--hidden-import=scipy',
-        '--hidden-import=pypdfium2',
-        
-        # 只排除开发工具（不排除任何科学计算库）
-        '--exclude-module=pytest',
-        '--exclude-module=IPython',
-        
-        'main.py'
-    ]
+    # 优先使用spec文件，如果没有则生成
+    spec_file = Path('MEMEFinder.spec')
+    
+    if spec_file.exists():
+        print("使用现有的 spec 文件: MEMEFinder.spec")
+        cmd = [
+            sys.executable, '-m', 'PyInstaller',
+            '--clean',
+            '--noconfirm',
+            str(spec_file)
+        ]
+    else:
+        print("使用命令行参数打包（将生成 spec 文件）")
+        # PyInstaller 命令
+        cmd = [
+            sys.executable, '-m', 'PyInstaller',
+            '--clean',
+            '--noconfirm',
+            '--name=MEMEFinder',
+            '--windowed',
+            
+            # 添加数据文件
+            '--add-data=src;src',
+            '--add-data=README.md;.',
+            '--add-data=LICENSE;.',
+            '--add-data=paddlex_patch.py;.',  # 添加补丁文件
+            '--add-data=paddle_runtime_patch.py;.',  # paddle运行时补丁
+            '--add-data=cv2_patch.py;.',  # cv2补丁
+            '--add-data=snownlp_patch.py;.',  # snownlp补丁
+            '--add-data=ocr_model_patch.py;.',  # OCR模型路径补丁
+            '--add-data=pyclipper_patch.py;.',  # pyclipper补丁
+            
+            # 关键：收集PaddleX的所有数据文件
+            '--collect-all=paddlex',
+            '--collect-all=paddle',
+            '--collect-all=paddleocr',
+            '--collect-all=paddlenlp',
+            '--collect-all=pypdfium2',
+            '--collect-all=pyclipper',  # PaddleOCR必需
+            '--collect-submodules=paddlex',
+            '--collect-submodules=paddle',
+            '--collect-submodules=paddleocr',
+            '--collect-submodules=paddlenlp',
+            '--collect-submodules=pypdfium2',
+            '--collect-submodules=pyclipper',  # PaddleOCR必需
+            
+            # 必需的隐藏导入 - 添加更多paddle相关模块
+            '--hidden-import=unittest',
+            '--hidden-import=unittest.mock',
+            '--hidden-import=doctest',
+            '--hidden-import=paddle',
+            '--hidden-import=paddle.framework',
+            '--hidden-import=paddle.framework.core',
+            '--hidden-import=paddle.framework.io',
+            '--hidden-import=paddle.fluid',
+            '--hidden-import=paddle.fluid.core',
+            '--hidden-import=paddle.fluid.framework',
+            '--hidden-import=paddle.fluid.io',
+            '--hidden-import=paddle.fluid.layers',
+            '--hidden-import=paddle.fluid.dygraph',
+            '--hidden-import=paddle.fluid.executor',
+            '--hidden-import=paddle.fluid.program_guard',
+            '--hidden-import=paddleocr',
+            '--hidden-import=paddlenlp',
+            '--hidden-import=paddlex',
+            '--hidden-import=paddlex.inference',
+            '--hidden-import=paddlex.inference.pipelines',
+            '--hidden-import=paddlex.inference.pipelines.ocr',
+            '--hidden-import=paddlex.inference.models',
+            '--hidden-import=paddlex.modules',
+            '--hidden-import=cv2',
+            '--hidden-import=PIL',
+            '--hidden-import=numpy',
+            '--hidden-import=pandas',  # PaddleX需要
+            '--hidden-import=tkinter',
+            '--hidden-import=sqlite3',
+            '--hidden-import=sklearn',
+            '--hidden-import=scipy',
+            '--hidden-import=pypdfium2',
+            '--hidden-import=pyclipper',  # PaddleOCR需要
+            '--hidden-import=shapely',  # PaddleOCR可能需要
+            '--hidden-import=imgaug',  # PaddleOCR可能需要
+            
+            # 只排除开发工具（不排除任何科学计算库）
+            '--exclude-module=pytest',
+            '--exclude-module=IPython',
+            
+            'main.py'
+        ]
     
     print("执行命令:")
     print(' '.join(cmd))
@@ -151,32 +186,180 @@ def create_release_package():
         shutil.copy2(readme_src, dist_dir / 'README.txt')
         print("✓ 复制 README.md")
     
+    # 复制LICENSE
+    license_src = Path('LICENSE')
+    if license_src.exists():
+        shutil.copy2(license_src, dist_dir / 'LICENSE.txt')
+        print("✓ 复制 LICENSE")
+    
     # 创建启动批处理
     launcher_bat = dist_dir / '启动MEMEFinder.bat'
     launcher_bat.write_text(
         '@echo off\n'
-        'start MEMEFinder.exe\n',
+        'chcp 65001 > nul\n'
+        'title MEMEFinder\n'
+        'cd /d "%~dp0"\n'
+        'if not exist "MEMEFinder.exe" (\n'
+        '    echo 错误: 找不到 MEMEFinder.exe\n'
+        '    pause\n'
+        '    exit /b 1\n'
+        ')\n'
+        'start "" "MEMEFinder.exe"\n',
         encoding='utf-8'
     )
     print("✓ 创建 启动MEMEFinder.bat")
+    
+    # 创建使用说明文件
+    usage_txt = dist_dir / '使用说明.txt'
+    usage_content = """═══════════════════════════════════════════════════════
+    MEMEFinder - 表情包查找器
+    使用说明
+═══════════════════════════════════════════════════════
+
+【快速开始】
+
+1. 首次使用（必须）：
+   - 双击运行 "启动MEMEFinder.bat" 或直接运行 "MEMEFinder.exe"
+   - 程序首次运行时会自动下载 AI 模型（需要网络连接）
+   - 模型下载可能需要 5-15 分钟，请耐心等待
+
+2. 日常使用：
+   - 双击 "启动MEMEFinder.bat" 或 "MEMEFinder.exe" 启动程序
+   - 在「图源管理」中添加表情包文件夹
+   - 点击「扫描新图片」扫描图片
+   - 在「图片处理」中运行 OCR 识别
+   - 在「图片搜索」中搜索表情包
+
+【重要提示】
+
+✓ 首次运行需要网络连接以下载 AI 模型
+✓ 模型文件会保存在程序目录的 models 文件夹中
+✓ 模型下载后可以离线使用
+✓ 建议将程序放在固定位置，不要随意移动
+
+【系统要求】
+
+- Windows 10/11 64位
+- 至少 4GB 内存
+- 至少 3GB 可用磁盘空间
+- 首次需要网络连接
+
+【常见问题】
+
+Q: 程序无法启动？
+A: 请确保系统是 Windows 10/11 64位，并检查是否有杀毒软件拦截
+
+Q: OCR 识别失败？
+A: 请确保已下载模型（首次运行会自动下载），检查网络连接
+
+Q: 程序运行缓慢？
+A: 首次运行需要初始化，后续会更快。大量图片处理需要时间
+
+【获取帮助】
+
+更多信息请查看 README.txt 文件
+或访问项目主页：https://github.com/aliveriver/MEMEFinder
+
+═══════════════════════════════════════════════════════
+"""
+    usage_txt.write_text(usage_content, encoding='utf-8')
+    print("✓ 创建 使用说明.txt")
+    
+    # 创建空目录（如果不存在）
+    (dist_dir / 'logs').mkdir(exist_ok=True)
+    (dist_dir / 'models').mkdir(exist_ok=True)
+    print("✓ 创建 logs 和 models 目录")
     
     # 创建ZIP包
     print("\n正在创建 ZIP 压缩包...")
     output_name = 'MEMEFinder-v1.0.0-Windows-x64'
     
-    shutil.make_archive(
-        str(Path('dist') / output_name),
-        'zip',
-        'dist',
-        'MEMEFinder'
-    )
+    # 检查源目录是否存在
+    if not dist_dir.exists():
+        print(f"✗ 错误: 源目录不存在: {dist_dir}")
+        return
     
-    zip_path = Path(f'dist/{output_name}.zip')
-    if zip_path.exists():
-        zip_size = zip_path.stat().st_size / (1024 * 1024)
-        print(f"✓ ZIP包: {zip_path} ({zip_size:.2f} MB)")
+    # 检查可执行文件是否存在
+    exe_file = dist_dir / 'MEMEFinder.exe'
+    if not exe_file.exists():
+        print(f"✗ 警告: 可执行文件不存在: {exe_file}")
+        print("   ZIP包将不包含主程序")
+    
+    try:
+        # 确保dist目录存在
+        dist_parent = Path('dist')
+        dist_parent.mkdir(exist_ok=True)
+        
+        # 创建ZIP包
+        zip_base = dist_parent / output_name
+        zip_path = Path(f'{zip_base}.zip')
+        
+        # 如果ZIP已存在，先删除
+        if zip_path.exists():
+            print(f"删除已存在的ZIP: {zip_path}")
+            zip_path.unlink()
+        
+        print(f"正在打包: {dist_dir.absolute()} -> {zip_path.absolute()}")
+        
+        # 使用绝对路径确保正确
+        zip_base_abs = zip_base.absolute()
+        dist_parent_abs = dist_parent.absolute()
+        
+        print(f"  源目录: {dist_dir.absolute()}")
+        print(f"  输出文件: {zip_path.absolute()}")
+        
+        shutil.make_archive(
+            str(zip_base_abs),
+            'zip',
+            str(dist_parent_abs),
+            'MEMEFinder'
+        )
+        
+        # 验证ZIP文件
+        if zip_path.exists():
+            zip_size = zip_path.stat().st_size / (1024 * 1024)
+            print(f"✓ ZIP包创建成功: {zip_path.absolute()}")
+            print(f"✓ ZIP包大小: {zip_size:.2f} MB")
+        else:
+            print(f"✗ 错误: ZIP文件未创建: {zip_path}")
+            print("  请检查是否有写入权限")
+            
+    except Exception as e:
+        print(f"✗ 创建ZIP包时出错: {e}")
+        import traceback
+        traceback.print_exc()
     
     print("\n✓ 发布包创建完成")
+
+
+def check_dependencies():
+    """检查依赖"""
+    print_header("检查依赖")
+    
+    missing = []
+    
+    # 检查paddle
+    try:
+        import paddle
+        print(f"✓ paddle 已安装")
+    except ImportError:
+        print("✗ paddle 未安装")
+        missing.append("paddlepaddle")
+    
+    # 检查PyInstaller
+    try:
+        import PyInstaller
+        print(f"✓ PyInstaller {PyInstaller.__version__}")
+    except ImportError:
+        print("✗ PyInstaller 未安装")
+        missing.append("pyinstaller")
+    
+    if missing:
+        print(f"\n✗ 缺少依赖: {', '.join(missing)}")
+        print("请运行: pip install " + " ".join(missing))
+        return False
+    
+    return True
 
 
 def main():
@@ -186,13 +369,8 @@ def main():
     print("║" + " " * 15 + "MEMEFinder Release 打包工具" + " " * 15 + "║")
     print("╚" + "=" * 58 + "╝")
     
-    # 检查PyInstaller
-    try:
-        import PyInstaller
-        print(f"\n✓ PyInstaller {PyInstaller.__version__}")
-    except ImportError:
-        print("\n✗ 未安装 PyInstaller")
-        print("请运行: pip install pyinstaller")
+    # 检查依赖
+    if not check_dependencies():
         input("\n按回车退出...")
         sys.exit(1)
     

@@ -9,6 +9,16 @@ from importlib import import_module
 
 from packaging.requirements import InvalidRequirement, Requirement
 
+# 确保cv2在paddlex使用前就被导入
+try:
+    import cv2
+    # 将cv2添加到builtins，这样paddlex内部模块可以直接使用
+    import builtins
+    if not hasattr(builtins, 'cv2'):
+        builtins.cv2 = cv2
+except ImportError:
+    pass  # cv2未安装，会在后续使用时报错
+
 
 # 映射需要特殊处理的依赖到其可直接导入的模块名
 DEPENDENCY_IMPORT_MAP = {
