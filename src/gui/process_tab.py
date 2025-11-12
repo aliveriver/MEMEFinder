@@ -9,6 +9,7 @@ from tkinter import ttk, scrolledtext, messagebox
 from datetime import datetime
 from pathlib import Path
 import threading
+import os
 
 from ..core.database import ImageDatabase
 from ..core.ocr_processor import OCRProcessor
@@ -20,7 +21,10 @@ class ProcessTab:
     def __init__(self, parent, db: ImageDatabase):
         self.parent = parent
         self.db = db
-        self.ocr_processor = OCRProcessor()
+        
+        # 检查是否启用GPU（通过环境变量或配置）
+        use_gpu = self._should_use_gpu()
+        self.ocr_processor = OCRProcessor(use_gpu=use_gpu)
         
         # 处理状态
         self.processing = False
@@ -29,6 +33,27 @@ class ProcessTab:
         # 创建主框架
         self.frame = ttk.Frame(parent)
         self.create_widgets()
+    
+    def _should_use_gpu(self) -> bool:
+        """
+        检查是否应该使用GPU
+        
+        优先级：
+        1. 环境变量 MEMEFINDER_USE_GPU (1/true/yes 启用，0/false/no 禁用)
+        2. 默认 False (使用CPU)
+        
+        Returns:
+            bool: 是否使用GPU
+        """
+        # 检查环境变量
+        env_use_gpu = os.environ.get('MEMEFINDER_USE_GPU', '').lower()
+        if env_use_gpu in ('1', 'true', 'yes', 'on'):
+            return True
+        elif env_use_gpu in ('0', 'false', 'no', 'off', ''):
+            return False
+        
+        # 默认使用CPU
+        return False
     
     def create_widgets(self):
         """创建界面组件"""

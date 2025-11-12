@@ -14,6 +14,16 @@ from typing import Dict, Any, List, Tuple
 
 import numpy as np
 from PIL import Image
+import cv2  # OpenCV - 必须在paddleocr之前导入，因为paddlex内部会使用
+
+# 注意：不在模块级别强制设置CPU模式
+# 设备选择将在 OCRProcessor 初始化时根据实际情况决定
+import sys
+
+# 只在打包环境且没有明确GPU需求时，才设置环境变量防止CUDA错误
+# 这样可以避免在没有GPU的环境中尝试加载CUDA库
+_is_frozen = getattr(sys, "frozen", False)
+
 import paddle
 # PaddleOCR
 from paddleocr import PaddleOCR
@@ -55,23 +65,16 @@ class OCRProcessor:
         self._process_count = 0
         self._gc_interval = 10  # 每处理10张图片执行一次垃圾回收
 
-        # 设置设备
-        if use_gpu:
-            try:
-                if self._cuda_compiled():
-                    paddle.set_device('gpu')
-                    logger.info("使用 GPU 进行 OCR 识别")
-                else:
-                    paddle.set_device('cpu')
-                    logger.warning("GPU 不可用，使用 CPU")
-            except Exception as e:
-                paddle.set_device('cpu')
-                logger.warning(f"GPU 设置失败 ({e})，使用 CPU")
+        # 设置设备（智能选择）
+        device_name, actually_using_gpu = self._setup_device(use_gpu)
+        if actually_using_gpu:
+            logger.info("✓ 使用 GPU 进行 OCR 识别（加速模式）")
         else:
-            paddle.set_device('cpu')
-            logger.info("使用 CPU 进行 OCR 识别")
+            logger.info(f"使用 {device_name.upper()} 进行 OCR 识别")
 
         # 初始化OCR（与 ocr_cli.py 完全一致的配置）
+        # 注意：新版本 PaddleOCR 不再接受 use_gpu 参数
+        # 设备选择已通过 paddle.set_device() 和环境变量控制
         logger.info(f"正在初始化 PaddleOCR (lang={lang}, det_side={det_side})...")
         self.ocr = PaddleOCR(
             lang=lang,
@@ -98,7 +101,7 @@ class OCRProcessor:
 
     @staticmethod
     def _cuda_compiled() -> bool:
-        """检查CUDA是否可用"""
+        """检查Paddle是否编译了CUDA支持"""
         try:
             # 在新版 Paddle 中优先使用 paddle.is_compiled_with_cuda
             if hasattr(paddle, 'is_compiled_with_cuda'):
@@ -107,6 +110,103 @@ class OCRProcessor:
             return False
         except Exception:
             return False
+    
+    @staticmethod
+    def _gpu_available() -> bool:
+        """检查GPU是否真的可用（运行时检测）"""
+        # 保存原始环境变量
+        original_cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', None)
+        original_flags_gpus = os.environ.get('FLAGS_selected_gpus', None)
+        
+        try:
+            # 检查是否有CUDA设备可用
+            if hasattr(paddle, 'is_compiled_with_cuda'):
+                if not paddle.is_compiled_with_cuda():
+                    return False
+            
+            # 尝试设置GPU并创建tensor来验证
+            try:
+                # 临时清除可能存在的禁用设置
+                if 'CUDA_VISIBLE_DEVICES' in os.environ and os.environ['CUDA_VISIBLE_DEVICES'] == '':
+                    del os.environ['CUDA_VISIBLE_DEVICES']
+                if 'FLAGS_selected_gpus' in os.environ and os.environ['FLAGS_selected_gpus'] == '':
+                    del os.environ['FLAGS_selected_gpus']
+                
+                # 尝试设置GPU
+                paddle.set_device('gpu')
+                # 尝试创建一个简单的tensor来验证GPU是否可用
+                test_tensor = paddle.zeros([1])
+                del test_tensor
+                
+                return True
+            except Exception:
+                return False
+        except Exception:
+            return False
+        finally:
+            # 恢复环境变量
+            if original_cuda_visible is not None:
+                os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_visible
+            elif 'CUDA_VISIBLE_DEVICES' not in os.environ and original_cuda_visible is None:
+                # 如果原来不存在，且现在被删除了，不需要恢复
+                pass
+            
+            if original_flags_gpus is not None:
+                os.environ['FLAGS_selected_gpus'] = original_flags_gpus
+            elif 'FLAGS_selected_gpus' not in os.environ and original_flags_gpus is None:
+                # 如果原来不存在，且现在被删除了，不需要恢复
+                pass
+    
+    @staticmethod
+    def _setup_device(use_gpu: bool) -> tuple[str, bool]:
+        """
+        设置计算设备
+        
+        Returns:
+            (device_name, actually_using_gpu): 实际使用的设备名称和是否真的在使用GPU
+        """
+        is_frozen = getattr(sys, "frozen", False)
+        actually_using_gpu = False
+        
+        if use_gpu:
+            # 用户想要使用GPU
+            if OCRProcessor._cuda_compiled():
+                # Paddle编译了CUDA支持
+                if OCRProcessor._gpu_available():
+                    # GPU真的可用
+                    try:
+                        # 在打包环境中，确保不设置禁用GPU的环境变量
+                        if is_frozen:
+                            # 清除可能存在的CPU强制设置
+                            if 'CUDA_VISIBLE_DEVICES' in os.environ and os.environ['CUDA_VISIBLE_DEVICES'] == '':
+                                del os.environ['CUDA_VISIBLE_DEVICES']
+                            if 'FLAGS_selected_gpus' in os.environ and os.environ['FLAGS_selected_gpus'] == '':
+                                del os.environ['FLAGS_selected_gpus']
+                        
+                        paddle.set_device('gpu')
+                        actually_using_gpu = True
+                        return ('gpu', True)
+                    except Exception as e:
+                        logger.warning(f"GPU设置失败 ({e})，回退到CPU")
+                        paddle.set_device('cpu')
+                        return ('cpu', False)
+                else:
+                    logger.warning("GPU不可用（运行时检测失败），使用CPU")
+                    paddle.set_device('cpu')
+                    return ('cpu', False)
+            else:
+                logger.warning("Paddle未编译CUDA支持，使用CPU")
+                paddle.set_device('cpu')
+                return ('cpu', False)
+        else:
+            # 用户不想使用GPU，或者打包环境中默认使用CPU
+            # 在打包环境中，设置环境变量防止尝试加载CUDA库
+            if is_frozen:
+                os.environ['CUDA_VISIBLE_DEVICES'] = ''
+                os.environ['FLAGS_selected_gpus'] = ''
+            
+            paddle.set_device('cpu')
+            return ('cpu', False)
 
     def process_image(self, image_path: Path, pad_ratio: float = 0.10) -> Dict[str, Any]:
         """
@@ -141,10 +241,21 @@ class OCRProcessor:
             
             # 1. OCR识别（使用 ocr_cli.py 的实现）
             ocr_result = self._ocr_with_padding(image_path, pad_ratio)
+            
+            # 检查OCR结果 - 确保ocr_result是字典
+            if not isinstance(ocr_result, dict):
+                logger.error(f"OCR结果格式错误，期望dict，得到{type(ocr_result)}")
+                ocr_result = {'items': []}
+            
+            items = ocr_result.get('items', [])
+            items_count = len(items)
+            logger.debug(f"OCR识别完成，识别到 {items_count} 个文本区域")
 
             # 2. 提取文本
-            ocr_text = self._extract_text(ocr_result)
-            logger.debug(f"OCR识别完成，提取到 {len(ocr_text)} 字符")
+            ocr_text = self._extract_text(items)
+            logger.debug(f"OCR文本提取完成，提取到 {len(ocr_text)} 字符")
+            if ocr_text:
+                logger.debug(f"提取的文本预览: {ocr_text[:100]}")
 
             # 3. 过滤文本
             filtered_text = self.filter_text(ocr_text)
@@ -174,9 +285,12 @@ class OCRProcessor:
 
     # ==================== OCR识别核心功能（来自 ocr_cli.py）====================
 
-    def _ocr_with_padding(self, img_path: Path, pad_ratio: float = 0.10) -> List[Dict[str, Any]]:
+    def _ocr_with_padding(self, img_path: Path, pad_ratio: float = 0.10) -> Dict[str, Any]:
         """
         带画布外扩的OCR识别（与 ocr_cli.py 一致）
+        
+        Returns:
+            {"image": "...", "items": [{"box":[[x,y]x4], "text":"...", "score":0.xx}, ...]}
         """
         td_ctx = None
         try:
@@ -187,13 +301,18 @@ class OCRProcessor:
 
             # OCR识别
             result = self._ocr_single(feed_path)
+            
+            # 确保result是字典
+            if not isinstance(result, dict):
+                logger.error(f"OCR结果格式错误，期望dict，得到{type(result)}")
+                result = {"image": str(img_path), "items": []}
 
             # 坐标回退到原图
             items = self._shift_items_to_original(
                 result.get("items", []), px, py, (orig_w, orig_h)
             )
 
-            return items
+            return {"image": str(img_path), "items": items}
 
         finally:
             if td_ctx is not None:
@@ -247,28 +366,53 @@ class OCRProcessor:
             {"image": "...", "items": [{"box":[[x,y]x4], "text":"...", "score":0.xx}, ...]}
         """
         res = None
+        error_msg = None
+        
         try:
             # 尝试使用 predict 方法
             try:
                 res = self.ocr.predict(str(img_path))
-            except TypeError:
+                logger.debug(f"OCR predict方法成功，结果类型: {type(res)}")
+            except TypeError as e:
+                logger.debug(f"OCR predict需要列表参数，尝试转换: {e}")
                 tmp = self.ocr.predict([str(img_path)])
                 res = tmp[0] if isinstance(tmp, (list, tuple)) and len(tmp) == 1 else tmp
-        except Exception:
+            except Exception as e:
+                error_msg = f"predict方法失败: {e}"
+                logger.debug(error_msg)
+                res = None
+        except Exception as e:
+            error_msg = f"OCR predict异常: {e}"
+            logger.debug(error_msg)
             res = None
 
         if not res:
             try:
+                logger.debug("尝试使用ocr方法...")
                 res = self.ocr.ocr(str(img_path))
-            except Exception:
+                logger.debug(f"OCR ocr方法成功，结果类型: {type(res)}")
+            except Exception as e:
+                error_msg = f"ocr方法失败: {e}"
+                logger.warning(error_msg)
                 res = None
 
         if not res:
+            logger.warning(f"OCR识别失败，未返回结果: {img_path.name}")
+            if error_msg:
+                logger.debug(f"错误详情: {error_msg}")
             items = []
             return {"image": str(img_path), "items": items}
 
         # 解析结果（使用 ocr_cli.py 的解析逻辑）
-        items = self._parse_ocr_result(res, img_path)
+        try:
+            items = self._parse_ocr_result(res, img_path)
+            logger.debug(f"OCR解析完成，识别到 {len(items)} 个文本区域")
+            if len(items) > 0:
+                logger.debug(f"第一个文本区域: {items[0].get('text', '')[:50]}")
+        except Exception as e:
+            logger.error(f"OCR结果解析失败: {e}")
+            logger.debug(f"原始结果类型: {type(res)}, 内容预览: {str(res)[:200]}")
+            items = []
 
         return {"image": str(img_path), "items": items}
 
