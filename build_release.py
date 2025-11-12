@@ -79,7 +79,11 @@ def build_exe():
         '--hidden-import=paddlex.inference.pipelines.ocr',
         '--hidden-import=paddlex.inference.models',
         '--hidden-import=paddlex.modules',
+        '--hidden-import=paddlex.inference.common',
+        '--hidden-import=paddlex.inference.common.reader',
+        '--hidden-import=paddlex.inference.common.reader.image_reader',
         '--hidden-import=cv2',
+        '--hidden-import=cv2.cv2',  # 确保 OpenCV 的核心模块
         '--hidden-import=PIL',
         '--hidden-import=numpy',
         '--hidden-import=pandas',  # PaddleX需要

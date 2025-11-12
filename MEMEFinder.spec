@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('src', 'src'), ('README.md', '.'), ('paddlex_patch.py', '.')]
 binaries = []
-hiddenimports = ['unittest', 'unittest.mock', 'doctest', 'paddleocr', 'paddlenlp', 'paddle', 'paddlex', 'paddlex.inference', 'paddlex.inference.pipelines', 'paddlex.inference.pipelines.ocr', 'paddlex.inference.models', 'paddlex.modules', 'cv2', 'PIL', 'numpy', 'pandas', 'tkinter', 'sqlite3', 'sklearn', 'scipy', 'pypdfium2']
+hiddenimports = ['unittest', 'unittest.mock', 'doctest', 'paddleocr', 'paddlenlp', 'paddle', 'paddlex', 'paddlex.inference', 'paddlex.inference.pipelines', 'paddlex.inference.pipelines.ocr', 'paddlex.inference.models', 'paddlex.modules', 'paddlex.inference.common', 'paddlex.inference.common.reader', 'paddlex.inference.common.reader.image_reader', 'cv2', 'cv2.cv2', 'PIL', 'numpy', 'pandas', 'tkinter', 'sqlite3', 'sklearn', 'scipy', 'pypdfium2']
 hiddenimports += collect_submodules('paddlex')
 hiddenimports += collect_submodules('paddle')
 hiddenimports += collect_submodules('paddleocr')
