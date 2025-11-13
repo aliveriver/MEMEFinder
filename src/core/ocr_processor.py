@@ -72,21 +72,50 @@ class OCRProcessor:
         else:
             logger.info(f"使用 {device_name.upper()} 进行 OCR 识别")
 
-        # 初始化OCR（与 ocr_cli.py 完全一致的配置）
+        # 初始化OCR（打包环境使用最小配置避免PaddleX依赖）
         # 注意：新版本 PaddleOCR 不再接受 use_gpu 参数
         # 设备选择已通过 paddle.set_device() 和环境变量控制
         logger.info(f"正在初始化 PaddleOCR (lang={lang}, det_side={det_side})...")
-        self.ocr = PaddleOCR(
-            lang=lang,
-            use_textline_orientation=True,
-            use_doc_orientation_classify=True,
-            use_doc_unwarping=True,
-            text_det_limit_side_len=det_side,
-            text_det_limit_type="max",
-            text_det_box_thresh=0.30,
-            text_det_unclip_ratio=2.30,
-        )
-        logger.info("PaddleOCR 初始化完成")
+        
+        # 检查是否是打包环境
+        is_frozen = getattr(sys, 'frozen', False)
+        
+        # 在打包环境中，使用最小配置避免PaddleX的依赖检查
+        if is_frozen:
+            logger.info("检测到打包环境，使用最小配置...")
+            # 关键：在导入PaddleOCR之前设置环境变量禁用PaddleX相关功能
+            os.environ['PPOCR_DISABLE_PADDLEX'] = '1'
+            os.environ['ENABLE_MKLDNN'] = '0'  # 禁用MKLDNN避免额外依赖
+            
+            try:
+                # 只使用lang参数，不使用任何高级特性
+                # 这样PaddleOCR不会调用PaddleX的任何功能
+                self.ocr = PaddleOCR(
+                    lang=lang,
+                    use_angle_cls=False,  # 明确禁用角度分类（避免触发PaddleX）
+                )
+                logger.info("PaddleOCR 初始化完成（最小配置，无PaddleX依赖）")
+            except Exception as e:
+                error_msg = f"OCR初始化失败: {e}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+        else:
+            # 开发环境使用完整配置
+            try:
+                self.ocr = PaddleOCR(
+                    lang=lang,
+                    use_angle_cls=True,
+                    text_det_limit_side_len=det_side,
+                    text_det_limit_type="max",
+                    text_det_box_thresh=0.30,
+                    text_det_unclip_ratio=2.30,
+                )
+                logger.info("PaddleOCR 初始化完成（完整配置）")
+            except Exception as e:
+                # 如果完整配置失败，降级到最小配置
+                logger.warning(f"完整配置失败，降级到最小配置: {e}")
+                self.ocr = PaddleOCR(lang=lang)
+                logger.info("PaddleOCR 初始化完成（降级配置）")
 
         # 初始化 Senta 情绪分析（可选）
         self._senta = None

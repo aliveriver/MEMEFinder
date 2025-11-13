@@ -1,18 +1,32 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
+from pathlib import Path
+
+# 检查哪些补丁文件存在
+patch_files = [
+    'paddlex_runtime_patch.py',  # 最重要的补丁！
+    'paddlex_patch.py',
+    'paddle_runtime_patch.py',
+    'cv2_patch.py',
+    'snownlp_patch.py',
+    'ocr_model_patch.py',
+    'pyclipper_patch.py',
+    'stdout_stderr_patch.py'
+]
 
 datas = [
     ('src', 'src'), 
     ('README.md', '.'), 
     ('LICENSE', '.'),
-    ('paddlex_patch.py', '.'),
-    ('paddle_runtime_patch.py', '.'),  # paddle运行时补丁
-    ('cv2_patch.py', '.'),  # cv2补丁
-    ('snownlp_patch.py', '.'),  # snownlp补丁
-    ('ocr_model_patch.py', '.'),  # OCR模型路径补丁
-    ('pyclipper_patch.py', '.'),  # pyclipper补丁
 ]
+
+# 只添加存在的补丁文件
+for patch in patch_files:
+    if Path(patch).exists():
+        datas.append((patch, '.'))
+        print(f"[SPEC] 添加补丁文件: {patch}")
+
 binaries = []
 
 # 手动添加pyclipper的二进制文件（collect_all可能无法正确收集）
@@ -56,13 +70,17 @@ hiddenimports = [
     # PaddleOCR和PaddleNLP
     'paddleocr',
     'paddlenlp',
-    # PaddleX
+    # PaddleX - 添加更多具体的模块
     'paddlex',
     'paddlex.inference',
     'paddlex.inference.pipelines',
     'paddlex.inference.pipelines.ocr',
     'paddlex.inference.models',
     'paddlex.modules',
+    'paddlex.utils',
+    'paddlex.utils.deps',  # 依赖检查模块
+    'paddlex.utils.env',
+    'paddlex.utils.logging',
     # 其他依赖
     'cv2', 'PIL', 'numpy', 'pandas', 'tkinter', 'sqlite3', 'sklearn', 'scipy', 'pypdfium2'
 ]

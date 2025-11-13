@@ -22,9 +22,9 @@ class ProcessTab:
         self.parent = parent
         self.db = db
         
-        # 检查是否启用GPU（通过环境变量或配置）
-        use_gpu = self._should_use_gpu()
-        self.ocr_processor = OCRProcessor(use_gpu=use_gpu)
+        # OCR处理器（延迟初始化）
+        self.ocr_processor = None
+        self._ocr_initialized = False
         
         # 处理状态
         self.processing = False
@@ -87,6 +87,30 @@ class ProcessTab:
         self.log_text = scrolledtext.ScrolledText(log_frame, height=20, wrap=tk.WORD)
         self.log_text.pack(fill=tk.BOTH, expand=True)
     
+    def _initialize_ocr(self):
+        """初始化OCR处理器（如果尚未初始化）"""
+        if self._ocr_initialized and self.ocr_processor:
+            return True
+        
+        # 如果没有预加载的实例，则现在加载
+        if self.ocr_processor is None:
+            try:
+                self.log_message("[INFO] 正在初始化 OCR 模型...")
+                use_gpu = self._should_use_gpu()
+                self.ocr_processor = OCRProcessor(use_gpu=use_gpu)
+                self._ocr_initialized = True
+                self.log_message("[INFO] OCR 模型加载完成")
+                return True
+            except Exception as e:
+                self.log_message(f"[错误] OCR 初始化失败: {e}")
+                messagebox.showerror("错误", f"OCR 初始化失败: {e}")
+                return False
+        else:
+            # 已经有预加载的实例
+            self._ocr_initialized = True
+            self.log_message("[INFO] 使用预加载的 OCR 模型")
+            return True
+    
     def start_processing(self):
         """开始处理图片"""
         if self.processing:
@@ -98,6 +122,11 @@ class ProcessTab:
             messagebox.showinfo("提示", "没有待处理的图片")
             return
         
+        # 首次运行时初始化OCR
+        if not self._ocr_initialized:
+            if not self._initialize_ocr():
+                return  # 初始化失败，不继续处理
+        
         # 标记应用状态为正在运行（用于断点恢复）
         try:
             self.db.set_app_state('processing_state', 'running')
@@ -106,8 +135,7 @@ class ProcessTab:
          
         self.processing = True
         self.log_message("=" * 50)
-        self.log_message("准备开始处理图片...")
-        self.log_message("注意: OCR和情绪分析功能将在下一步实现")
+        self.log_message("开始处理图片...")
         self.log_message("=" * 50)
         
         # 在单独线程中处理
@@ -161,10 +189,11 @@ class ProcessTab:
                 img_path = img_info['file_path']
                 
                 try:
-                    # 更新进度
+                    # 更新进度（线程安全）
                     progress = (idx / total) * 100
-                    self.progress_var.set(progress)
-                    self.progress_label.config(text=f"正在处理: {idx}/{total} - {Path(img_path).name}")
+                    self.frame.after(0, lambda p=progress: self.progress_var.set(p))
+                    self.frame.after(0, lambda t=f"正在处理: {idx}/{total} - {Path(img_path).name}": 
+                                    self.progress_label.config(text=t))
                     
                     self.log_message(f"[{idx}/{total}] 处理: {Path(img_path).name}")
                     
@@ -207,8 +236,10 @@ class ProcessTab:
                 self.db.set_app_state('processing_state', 'idle')
             except Exception:
                 pass
-            self.progress_var.set(100)
-            self.progress_label.config(text=f"处理完成: 成功 {processed_count}, 失败 {error_count}")
+            # 线程安全地更新UI
+            self.frame.after(0, lambda: self.progress_var.set(100))
+            self.frame.after(0, lambda: self.progress_label.config(
+                text=f"处理完成: 成功 {processed_count}, 失败 {error_count}"))
             self.log_message("=" * 50)
             self.log_message(f"[完成] 处理结束")
             self.log_message(f"  成功: {processed_count} 张")
@@ -226,7 +257,18 @@ class ProcessTab:
             self.log_message(traceback.format_exc())
     
     def log_message(self, message: str):
-        """添加日志消息"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
-        self.log_text.see(tk.END)
+        """添加日志消息（线程安全）"""
+        def _log():
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
+            self.log_text.see(tk.END)
+        
+        # 如果在主线程中，直接执行；否则使用 after 调度到主线程
+        try:
+            self.frame.after(0, _log)
+        except:
+            # 如果 after 失败，尝试直接执行（可能是在主线程中）
+            try:
+                _log()
+            except:
+                pass  # 静默失败，避免崩溃

@@ -23,11 +23,54 @@ def clean_build():
     """清理构建目录"""
     print_header("清理旧文件")
     
+    # 先尝试关闭可能占用文件的程序
+    try:
+        import subprocess
+        # 尝试关闭 MEMEFinder.exe（忽略错误）
+        subprocess.run(['taskkill', '/F', '/IM', 'MEMEFinder.exe'], 
+                      capture_output=True, timeout=5)
+        import time
+        time.sleep(1)  # 等待进程完全关闭
+    except:
+        pass  # 忽略错误
+    
     dirs_to_clean = ['build', 'dist']
     for dir_name in dirs_to_clean:
         if Path(dir_name).exists():
             print(f"删除: {dir_name}/")
-            shutil.rmtree(dir_name)
+            try:
+                # 尝试多次删除，处理文件被占用的情况
+                max_retries = 3
+                for retry in range(max_retries):
+                    try:
+                        shutil.rmtree(dir_name)
+                        break  # 成功删除，退出重试循环
+                    except PermissionError as e:
+                        if retry < max_retries - 1:
+                            print(f"  文件被占用，等待后重试... ({retry + 1}/{max_retries})")
+                            import time
+                            time.sleep(2)
+                        else:
+                            # 最后一次尝试：跳过被占用的文件
+                            print(f"  警告: 某些文件被占用，尝试跳过...")
+                            shutil.rmtree(dir_name, ignore_errors=True)
+                            # 如果目录仍然存在，尝试删除未被占用的文件
+                            if Path(dir_name).exists():
+                                for root, dirs, files in os.walk(dir_name, topdown=False):
+                                    for name in files:
+                                        try:
+                                            os.remove(os.path.join(root, name))
+                                        except:
+                                            pass
+                                    for name in dirs:
+                                        try:
+                                            os.rmdir(os.path.join(root, name))
+                                        except:
+                                            pass
+                            print(f"  已跳过被占用的文件，继续打包...")
+            except Exception as e:
+                print(f"  警告: 清理 {dir_name} 时出错: {e}")
+                print(f"  将继续打包过程...")
     
     # 不删除 spec 文件，保留配置
     # for spec in Path('.').glob('*.spec'):
@@ -54,6 +97,23 @@ def build_exe():
         ]
     else:
         print("使用命令行参数打包（将生成 spec 文件）")
+        
+        # 检查哪些补丁文件存在
+        patch_files = [
+            'paddlex_patch.py',
+            'paddle_runtime_patch.py',
+            'cv2_patch.py',
+            'snownlp_patch.py',
+            'ocr_model_patch.py',
+            'pyclipper_patch.py',
+            'stdout_stderr_patch.py'
+        ]
+        
+        existing_patches = []
+        for patch in patch_files:
+            if Path(patch).exists():
+                existing_patches.append(f'--add-data={patch};.')
+        
         # PyInstaller 命令
         cmd = [
             sys.executable, '-m', 'PyInstaller',
@@ -66,13 +126,13 @@ def build_exe():
             '--add-data=src;src',
             '--add-data=README.md;.',
             '--add-data=LICENSE;.',
-            '--add-data=paddlex_patch.py;.',  # 添加补丁文件
-            '--add-data=paddle_runtime_patch.py;.',  # paddle运行时补丁
-            '--add-data=cv2_patch.py;.',  # cv2补丁
-            '--add-data=snownlp_patch.py;.',  # snownlp补丁
-            '--add-data=ocr_model_patch.py;.',  # OCR模型路径补丁
-            '--add-data=pyclipper_patch.py;.',  # pyclipper补丁
-            
+        ]
+        
+        # 添加存在的补丁文件
+        cmd.extend(existing_patches)
+        
+        # 继续添加其他参数
+        cmd.extend([
             # 关键：收集PaddleX的所有数据文件
             '--collect-all=paddlex',
             '--collect-all=paddle',
@@ -129,7 +189,7 @@ def build_exe():
             '--exclude-module=IPython',
             
             'main.py'
-        ]
+        ])
     
     print("执行命令:")
     print(' '.join(cmd))
