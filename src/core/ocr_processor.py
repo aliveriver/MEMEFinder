@@ -14,19 +14,10 @@ from typing import Dict, Any, List, Tuple
 
 import numpy as np
 from PIL import Image
-import cv2  # OpenCV - 必须在paddleocr之前导入，因为paddlex内部会使用
+import cv2
 
-# 注意：不在模块级别强制设置CPU模式
-# 设备选择将在 OCRProcessor 初始化时根据实际情况决定
-import sys
-
-# 只在打包环境且没有明确GPU需求时，才设置环境变量防止CUDA错误
-# 这样可以避免在没有GPU的环境中尝试加载CUDA库
-_is_frozen = getattr(sys, "frozen", False)
-
-import paddle
-# PaddleOCR
-from paddleocr import PaddleOCR
+# RapidOCR - 轻量级OCR引擎，易于打包
+from rapidocr_onnxruntime import RapidOCR
 
 # 导入日志和资源监控
 import sys
@@ -39,20 +30,20 @@ resource_monitor = get_resource_monitor()
 
 
 class OCRProcessor:
-    """OCR处理器 - 与 ocr_cli.py 完全兼容的实现（优化版）"""
+    """OCR处理器 - 使用 RapidOCR（轻量级，易于打包）"""
 
     def __init__(self, lang: str = 'ch', use_gpu: bool = False, det_side: int = 1536, use_senta: bool = True):
         """
         初始化OCR处理器
 
         Args:
-            lang: 语言，默认'ch'（中文）
-            use_gpu: 是否使用GPU
+            lang: 语言，默认'ch'（中文）- RapidOCR会忽略此参数，因为它已内置多语言支持
+            use_gpu: 是否使用GPU - RapidOCR ONNX版本已优化，CPU性能很好
             det_side: 检测侧边长度，默认1536（可降低以减少内存）
             use_senta: 是否使用情绪分析模型，默认True（优先使用 SnowNLP，快速且准确）
         """
         logger.info("=" * 60)
-        logger.info("初始化 OCR 处理器...")
+        logger.info("初始化 OCR 处理器（RapidOCR）...")
         
         self.lang = lang
         self.det_side = det_side
@@ -61,61 +52,30 @@ class OCRProcessor:
         self._process_count = 0
         self._gc_interval = 10  # 每处理10张图片执行一次垃圾回收
 
-        # 处理计数器（用于定期清理内存）
-        self._process_count = 0
-        self._gc_interval = 10  # 每处理10张图片执行一次垃圾回收
-
-        # 设置设备（智能选择）
-        device_name, actually_using_gpu = self._setup_device(use_gpu)
-        if actually_using_gpu:
-            logger.info("✓ 使用 GPU 进行 OCR 识别（加速模式）")
-        else:
-            logger.info(f"使用 {device_name.upper()} 进行 OCR 识别")
-
-        # 初始化OCR（打包环境使用最小配置避免PaddleX依赖）
-        # 注意：新版本 PaddleOCR 不再接受 use_gpu 参数
-        # 设备选择已通过 paddle.set_device() 和环境变量控制
-        logger.info(f"正在初始化 PaddleOCR (lang={lang}, det_side={det_side})...")
-        
-        # 检查是否是打包环境
-        is_frozen = getattr(sys, 'frozen', False)
-        
-        # 在打包环境中，使用最小配置避免PaddleX的依赖检查
-        if is_frozen:
-            logger.info("检测到打包环境，使用最小配置...")
-            # 关键：在导入PaddleOCR之前设置环境变量禁用PaddleX相关功能
-            os.environ['PPOCR_DISABLE_PADDLEX'] = '1'
-            os.environ['ENABLE_MKLDNN'] = '0'  # 禁用MKLDNN避免额外依赖
+        # 初始化 RapidOCR
+        logger.info("正在初始化 RapidOCR...")
+        try:
+            # RapidOCR 初始化非常简单，无需复杂配置
+            # use_cuda=True 可以启用GPU加速（如果支持）
+            # use_angle_cls=True 启用文本方向分类
+            # print_verbose=False 不打印详细日志
+            self.ocr = RapidOCR(
+                det_use_cuda=use_gpu,  # 检测模型是否使用CUDA
+                cls_use_cuda=use_gpu,  # 方向分类是否使用CUDA  
+                rec_use_cuda=use_gpu   # 识别模型是否使用CUDA
+            )
             
-            try:
-                # 只使用lang参数，不使用任何高级特性
-                # 这样PaddleOCR不会调用PaddleX的任何功能
-                self.ocr = PaddleOCR(
-                    lang=lang,
-                    use_angle_cls=False,  # 明确禁用角度分类（避免触发PaddleX）
-                )
-                logger.info("PaddleOCR 初始化完成（最小配置，无PaddleX依赖）")
-            except Exception as e:
-                error_msg = f"OCR初始化失败: {e}"
-                logger.error(error_msg)
-                raise Exception(error_msg)
-        else:
-            # 开发环境使用完整配置
-            try:
-                self.ocr = PaddleOCR(
-                    lang=lang,
-                    use_angle_cls=True,
-                    text_det_limit_side_len=det_side,
-                    text_det_limit_type="max",
-                    text_det_box_thresh=0.30,
-                    text_det_unclip_ratio=2.30,
-                )
-                logger.info("PaddleOCR 初始化完成（完整配置）")
-            except Exception as e:
-                # 如果完整配置失败，降级到最小配置
-                logger.warning(f"完整配置失败，降级到最小配置: {e}")
-                self.ocr = PaddleOCR(lang=lang)
-                logger.info("PaddleOCR 初始化完成（降级配置）")
+            if self.ocr is None:
+                raise Exception("RapidOCR 初始化返回 None")
+            
+            device_type = "GPU" if use_gpu else "CPU"
+            logger.info(f"✓ RapidOCR 初始化成功（{device_type} 模式）")
+            logger.info("RapidOCR 优势：轻量级、易打包、无复杂依赖")
+            
+        except Exception as e:
+            error_msg = f"RapidOCR 初始化失败: {e}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
 
         # 初始化 Senta 情绪分析（可选）
         self._senta = None
@@ -127,115 +87,6 @@ class OCRProcessor:
         resource_monitor.log_resource_status()
         logger.info("OCR 处理器初始化完成")
         logger.info("=" * 60)
-
-    @staticmethod
-    def _cuda_compiled() -> bool:
-        """检查Paddle是否编译了CUDA支持"""
-        try:
-            # 在新版 Paddle 中优先使用 paddle.is_compiled_with_cuda
-            if hasattr(paddle, 'is_compiled_with_cuda'):
-                return bool(paddle.is_compiled_with_cuda())
-            # 兼容性：如果没有该函数，则认为不可用
-            return False
-        except Exception:
-            return False
-    
-    @staticmethod
-    def _gpu_available() -> bool:
-        """检查GPU是否真的可用（运行时检测）"""
-        # 保存原始环境变量
-        original_cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', None)
-        original_flags_gpus = os.environ.get('FLAGS_selected_gpus', None)
-        
-        try:
-            # 检查是否有CUDA设备可用
-            if hasattr(paddle, 'is_compiled_with_cuda'):
-                if not paddle.is_compiled_with_cuda():
-                    return False
-            
-            # 尝试设置GPU并创建tensor来验证
-            try:
-                # 临时清除可能存在的禁用设置
-                if 'CUDA_VISIBLE_DEVICES' in os.environ and os.environ['CUDA_VISIBLE_DEVICES'] == '':
-                    del os.environ['CUDA_VISIBLE_DEVICES']
-                if 'FLAGS_selected_gpus' in os.environ and os.environ['FLAGS_selected_gpus'] == '':
-                    del os.environ['FLAGS_selected_gpus']
-                
-                # 尝试设置GPU
-                paddle.set_device('gpu')
-                # 尝试创建一个简单的tensor来验证GPU是否可用
-                test_tensor = paddle.zeros([1])
-                del test_tensor
-                
-                return True
-            except Exception:
-                return False
-        except Exception:
-            return False
-        finally:
-            # 恢复环境变量
-            if original_cuda_visible is not None:
-                os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_visible
-            elif 'CUDA_VISIBLE_DEVICES' not in os.environ and original_cuda_visible is None:
-                # 如果原来不存在，且现在被删除了，不需要恢复
-                pass
-            
-            if original_flags_gpus is not None:
-                os.environ['FLAGS_selected_gpus'] = original_flags_gpus
-            elif 'FLAGS_selected_gpus' not in os.environ and original_flags_gpus is None:
-                # 如果原来不存在，且现在被删除了，不需要恢复
-                pass
-    
-    @staticmethod
-    def _setup_device(use_gpu: bool) -> tuple[str, bool]:
-        """
-        设置计算设备
-        
-        Returns:
-            (device_name, actually_using_gpu): 实际使用的设备名称和是否真的在使用GPU
-        """
-        is_frozen = getattr(sys, "frozen", False)
-        actually_using_gpu = False
-        
-        if use_gpu:
-            # 用户想要使用GPU
-            if OCRProcessor._cuda_compiled():
-                # Paddle编译了CUDA支持
-                if OCRProcessor._gpu_available():
-                    # GPU真的可用
-                    try:
-                        # 在打包环境中，确保不设置禁用GPU的环境变量
-                        if is_frozen:
-                            # 清除可能存在的CPU强制设置
-                            if 'CUDA_VISIBLE_DEVICES' in os.environ and os.environ['CUDA_VISIBLE_DEVICES'] == '':
-                                del os.environ['CUDA_VISIBLE_DEVICES']
-                            if 'FLAGS_selected_gpus' in os.environ and os.environ['FLAGS_selected_gpus'] == '':
-                                del os.environ['FLAGS_selected_gpus']
-                        
-                        paddle.set_device('gpu')
-                        actually_using_gpu = True
-                        return ('gpu', True)
-                    except Exception as e:
-                        logger.warning(f"GPU设置失败 ({e})，回退到CPU")
-                        paddle.set_device('cpu')
-                        return ('cpu', False)
-                else:
-                    logger.warning("GPU不可用（运行时检测失败），使用CPU")
-                    paddle.set_device('cpu')
-                    return ('cpu', False)
-            else:
-                logger.warning("Paddle未编译CUDA支持，使用CPU")
-                paddle.set_device('cpu')
-                return ('cpu', False)
-        else:
-            # 用户不想使用GPU，或者打包环境中默认使用CPU
-            # 在打包环境中，设置环境变量防止尝试加载CUDA库
-            if is_frozen:
-                os.environ['CUDA_VISIBLE_DEVICES'] = ''
-                os.environ['FLAGS_selected_gpus'] = ''
-            
-            paddle.set_device('cpu')
-            return ('cpu', False)
 
     def process_image(self, image_path: Path, pad_ratio: float = 0.10) -> Dict[str, Any]:
         """
@@ -389,188 +240,63 @@ class OCRProcessor:
 
     def _ocr_single(self, img_path: Path) -> Dict[str, Any]:
         """
-        单张图片OCR识别（与 ocr_cli.py 完全一致）
+        单张图片OCR识别（使用 RapidOCR）
 
         Returns:
             {"image": "...", "items": [{"box":[[x,y]x4], "text":"...", "score":0.xx}, ...]}
         """
-        res = None
-        error_msg = None
-        
         try:
-            # 尝试使用 predict 方法
-            try:
-                res = self.ocr.predict(str(img_path))
-                logger.debug(f"OCR predict方法成功，结果类型: {type(res)}")
-            except TypeError as e:
-                logger.debug(f"OCR predict需要列表参数，尝试转换: {e}")
-                tmp = self.ocr.predict([str(img_path)])
-                res = tmp[0] if isinstance(tmp, (list, tuple)) and len(tmp) == 1 else tmp
-            except Exception as e:
-                error_msg = f"predict方法失败: {e}"
-                logger.debug(error_msg)
-                res = None
-        except Exception as e:
-            error_msg = f"OCR predict异常: {e}"
-            logger.debug(error_msg)
-            res = None
-
-        if not res:
-            try:
-                logger.debug("尝试使用ocr方法...")
-                res = self.ocr.ocr(str(img_path))
-                logger.debug(f"OCR ocr方法成功，结果类型: {type(res)}")
-            except Exception as e:
-                error_msg = f"ocr方法失败: {e}"
-                logger.warning(error_msg)
-                res = None
-
-        if not res:
-            logger.warning(f"OCR识别失败，未返回结果: {img_path.name}")
-            if error_msg:
-                logger.debug(f"错误详情: {error_msg}")
+            # RapidOCR 返回格式: 
+            # - 成功时: (result_list, elapse) 其中 result_list = [[box, text, score], ...]
+            # - 失败时: (None, elapse) 或 ([], elapse)
+            result = self.ocr(str(img_path))
+            
+            if result is None:
+                logger.warning(f"OCR识别失败，未返回结果: {img_path.name}")
+                return {"image": str(img_path), "items": []}
+            
+            # RapidOCR 返回 (result_list, elapse_time)
+            if isinstance(result, tuple) and len(result) == 2:
+                result_list, elapse = result
+                # elapse 可能是数字或列表
+                if isinstance(elapse, (list, tuple)):
+                    logger.debug(f"OCR耗时: {elapse}")
+                else:
+                    logger.debug(f"OCR耗时: {elapse:.2f}ms")
+            else:
+                result_list = result
+            
+            # 解析 RapidOCR 结果
             items = []
+            
+            if result_list:
+                for item in result_list:
+                    # item 格式: [box, text, score]
+                    # box: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+                    if len(item) >= 2:  # 至少有 box 和 text
+                        box = item[0]
+                        text = item[1]
+                        score = item[2] if len(item) > 2 else 1.0
+                        
+                        items.append({
+                            "box": box.tolist() if hasattr(box, 'tolist') else box,
+                            "text": str(text),
+                            "score": float(score)
+                        })
+                
+                logger.debug(f"OCR识别完成，识别到 {len(items)} 个文本区域")
+                if len(items) > 0:
+                    logger.debug(f"第一个文本区域: {items[0].get('text', '')[:50]}")
+            
             return {"image": str(img_path), "items": items}
-
-        # 解析结果（使用 ocr_cli.py 的解析逻辑）
-        try:
-            items = self._parse_ocr_result(res, img_path)
-            logger.debug(f"OCR解析完成，识别到 {len(items)} 个文本区域")
-            if len(items) > 0:
-                logger.debug(f"第一个文本区域: {items[0].get('text', '')[:50]}")
+            
         except Exception as e:
-            logger.error(f"OCR结果解析失败: {e}")
-            logger.debug(f"原始结果类型: {type(res)}, 内容预览: {str(res)[:200]}")
-            items = []
+            logger.error(f"OCR识别异常: {e}")
+            import traceback
+            logger.debug(f"错误详情:\n{traceback.format_exc()}")
+            return {"image": str(img_path), "items": []}
 
-        return {"image": str(img_path), "items": items}
 
-    def _parse_ocr_result(self, res, img_path: Path) -> List[Dict[str, Any]]:
-        """
-        解析OCR结果（与 ocr_cli.py 完全一致的解析逻辑）
-        """
-        items: List[Dict[str, Any]] = []
-
-        def _tolist(x):
-            try:
-                return x.tolist() if hasattr(x, "tolist") else x
-            except Exception:
-                return x
-
-        def _find_inner_res(d):
-            # 递归查找包含 rec_texts + (rec_polys|dt_polys) 的层
-            if isinstance(d, dict):
-                if "res" in d and isinstance(d["res"], dict):
-                    v = d["res"]
-                    ks = v.keys()
-                    if ("rec_texts" in ks) and (("rec_polys" in ks) or ("dt_polys" in ks)):
-                        return v
-                ks = d.keys()
-                if ("rec_texts" in ks) and (("rec_polys" in ks) or ("dt_polys" in ks)):
-                    return d
-                for v in d.values():
-                    inner = _find_inner_res(v)
-                    if inner is not None:
-                        return inner
-            elif isinstance(d, (list, tuple)):
-                for v in d:
-                    inner = _find_inner_res(v)
-                    if inner is not None:
-                        return inner
-            return None
-
-        inner = _find_inner_res(res)
-        if inner is not None:
-            texts = list(inner.get("rec_texts") or [])
-            scores = list(inner.get("rec_scores") or [])
-            polys = _tolist(inner.get("rec_polys") or inner.get("dt_polys"))
-            n = len(texts)
-            for i in range(n):
-                text = str(texts[i])
-                score = float(scores[i]) if i < len(scores) else 0.0
-                if polys is not None and i < len(polys):
-                    box = _tolist(polys[i])
-                    if isinstance(box, (list, tuple)) and len(box) == 4 and all(
-                        isinstance(p, (list, tuple)) and len(p) == 2 for p in box
-                    ):
-                        items.append({"box": box, "text": text, "score": score})
-            return items
-
-        # 旧风格解析
-        def _num(x):
-            return isinstance(x, (int, float, np.integer, np.floating))
-
-        def _pt(p):
-            return isinstance(p, (list, tuple, np.ndarray)) and len(p) == 2 and _num(p[0]) and _num(p[1])
-
-        def _box(b):
-            if hasattr(b, "tolist"):
-                try:
-                    b = b.tolist()
-                except Exception:
-                    return None
-            return b if (isinstance(b, (list, tuple)) and len(b) == 4 and all(_pt(p) for p in b)) else None
-
-        def _ts(v):
-            return (isinstance(v, (list, tuple)) and len(v) >= 2 and isinstance(v[0], str) and _num(v[1]))
-
-        if isinstance(res, (list, tuple)) and len(res) > 0:
-            first = res[0]
-            if isinstance(first, (list, tuple)) and first and isinstance(first[0], (list, tuple)):
-                for line in first:
-                    if not (isinstance(line, (list, tuple)) and len(line) >= 2):
-                        continue
-                    b = _box(line[0])
-                    ts = line[1]
-                    if b is not None and _ts(ts):
-                        items.append({"box": b, "text": ts[0], "score": float(ts[1])})
-                if items:
-                    return items
-
-            ok = False
-            for line in res:
-                if not (isinstance(line, (list, tuple)) and len(line) >= 2):
-                    continue
-                b = _box(line[0])
-                ts = line[1]
-                if b is not None and _ts(ts):
-                    items.append({"box": b, "text": ts[0], "score": float(ts[1])})
-                    ok = True
-            if ok:
-                return items
-
-        if (
-            isinstance(res, (list, tuple)) and len(res) == 2
-            and isinstance(res[0], (list, tuple)) and isinstance(res[1], (list, tuple))
-        ):
-            det_boxes, recs = res[0], res[1]
-            n = min(len(det_boxes), len(recs))
-            for i in range(n):
-                b = _box(det_boxes[i])
-                ts = recs[i]
-                if b is not None and _ts(ts):
-                    items.append({"box": b, "text": ts[0], "score": float(ts[1])})
-            if items:
-                return items
-
-        seq = res if isinstance(res, (list, tuple)) else [res]
-        took = False
-        for d in seq:
-            if not isinstance(d, dict):
-                continue
-            b = _box(d.get("box") or d.get("bbox") or d.get("points") or d.get("poly") or d.get("det"))
-            ts = d.get("rec")
-            text = d.get("text") or d.get("transcription") or d.get("label")
-            score = d.get("score") or d.get("confidence") or d.get("prob")
-            if ts and _ts(ts):
-                text, score = ts[0], ts[1]
-            if b is not None and isinstance(text, str):
-                items.append({"box": b, "text": text, "score": float(score or 0.0)})
-                took = True
-        if took:
-            return items
-
-        return []
 
     def _extract_text(self, ocr_result: List[Dict[str, Any]]) -> str:
         """从OCR结果中提取文本"""
