@@ -1,15 +1,21 @@
-# IDEs
+# ===============================
+# IDEs and Editors
+# ===============================
 .idea/
 .vscode/
 *.iml
+*.swp
+*.swo
+*~
 
+# ===============================
 # Python
+# ===============================
 __pycache__/
 *.py[cod]
 *.so
+*.egg
 *.egg-info/
-build/
-dist/
 .eggs/
 *.spec
 
@@ -18,20 +24,34 @@ venv/
 .venv/
 env/
 ENV/
+.python-version
 
-# Project-specific outputs and large binaries
-imgs/
-out/
-*.pdf
-*.zip
-*.tar.gz
+# ===============================
+# Build and Distribution
+# ===============================
+build/
+dist/
+*.exe
+!installer/*.exe
 
 # Installer output
 installer/installer/
 installer/*.exe
 
-# Databases and local data
+# ===============================
+# Project-specific Data
+# ===============================
+# Images and media
+imgs/
+out/
+*.zip
+*.tar.gz
+*.rar
+
+# Databases
 *.db
+*.db-shm
+*.db-wal
 meme_finder.db
 
 # Models (large files, should be downloaded by users)
@@ -43,22 +63,44 @@ models/**/*.pdmodel
 models/**/*.onnx
 !models/README.md
 
-# Logs and temp files
+# ===============================
+# Logs and Temporary Files
+# ===============================
+logs/
 *.log
 *.tmp
 *.temp
+*.bak
+error_log.txt
 
-# OS files
+# ===============================
+# OS and System Files
+# ===============================
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Misc
-pip-wheel-metadata/
+# ===============================
+# Development and Testing
+# ===============================
+.pytest_cache/
+.coverage
 coverage.xml
 htmlcov/
+.tox/
 .report/
 
-# Keep track of local environment files
+# ===============================
+# Environment and Config
+# ===============================
 .env
+.env.local
+*.local
+
+# ===============================
+# Documentation Build
+# ===============================
+docs/_build/
+docs/.doctrees/
 
 # End of file
