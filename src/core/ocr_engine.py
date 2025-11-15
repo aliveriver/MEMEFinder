@@ -74,15 +74,81 @@ class OCREngine:
                 'cls_model_path': str(cls_model),
             }
             
+            # 如果启用GPU，先验证CUDA是否真的可用
+            original_use_gpu = self.use_gpu
+            if self.use_gpu:
+                try:
+                    import onnxruntime as ort
+                    available_providers = ort.get_available_providers()
+                    if 'CUDAExecutionProvider' not in available_providers:
+                        logger.warning("⚠ CUDA不可用，将自动切换到CPU模式")
+                        logger.warning(f"  可用提供者: {available_providers}")
+                        self.use_gpu = False
+                        rapidocr_kwargs['det_use_cuda'] = False
+                        rapidocr_kwargs['cls_use_cuda'] = False
+                        rapidocr_kwargs['rec_use_cuda'] = False
+                except Exception as e:
+                    logger.warning(f"⚠ 检查CUDA可用性失败: {e}")
+                    logger.warning("  将尝试使用GPU模式，如失败将回退到CPU")
+            
             logger.info(f"模型路径配置:")
             logger.info(f"  检测模型: {det_model}")
             logger.info(f"  识别模型: {rec_model}")
             logger.info(f"  方向分类: {cls_model}")
             
-            self.ocr = RapidOCR(**rapidocr_kwargs)
+            # 尝试初始化，GPU失败时回退到CPU
+            ocr_initialized = False
+            last_error = None
             
-            if self.ocr is None:
-                raise Exception("RapidOCR 初始化返回 None")
+            try:
+                logger.info(f"尝试初始化 RapidOCR ({'GPU' if self.use_gpu else 'CPU'} 模式)...")
+                self.ocr = RapidOCR(**rapidocr_kwargs)
+                
+                if self.ocr is None:
+                    raise Exception("RapidOCR 初始化返回 None")
+                
+                ocr_initialized = True
+                logger.info("✓ RapidOCR 对象创建成功")
+                
+            except Exception as e:
+                last_error = e
+                logger.error(f"✗ RapidOCR 初始化失败: {e}")
+                
+                # 如果是GPU模式失败，尝试回退到CPU
+                if original_use_gpu and self.use_gpu:
+                    logger.warning("=" * 60)
+                    logger.warning("⚠ GPU模式初始化失败，正在回退到CPU模式...")
+                    logger.warning("  可能原因：")
+                    logger.warning("    1. 缺少 onnxruntime-gpu 包")
+                    logger.warning("    2. CUDA版本不兼容")
+                    logger.warning("    3. GPU驱动问题")
+                    logger.warning("=" * 60)
+                    
+                    try:
+                        # 切换到CPU模式
+                        rapidocr_kwargs['det_use_cuda'] = False
+                        rapidocr_kwargs['cls_use_cuda'] = False
+                        rapidocr_kwargs['rec_use_cuda'] = False
+                        self.use_gpu = False
+                        
+                        logger.info("重新尝试初始化 RapidOCR (CPU 模式)...")
+                        self.ocr = RapidOCR(**rapidocr_kwargs)
+                        
+                        if self.ocr is None:
+                            raise Exception("RapidOCR 初始化返回 None")
+                        
+                        ocr_initialized = True
+                        logger.info("✓ CPU模式初始化成功")
+                        
+                    except Exception as cpu_error:
+                        logger.error(f"✗ CPU模式也初始化失败: {cpu_error}")
+                        raise Exception(f"RapidOCR 初始化完全失败 - GPU错误: {last_error}, CPU错误: {cpu_error}")
+                else:
+                    # 如果本来就是CPU模式，直接抛出错误
+                    raise
+            
+            if not ocr_initialized or self.ocr is None:
+                raise Exception("RapidOCR 初始化失败")
             
             # 验证实际使用的设备
             actual_device = self._get_actual_device()

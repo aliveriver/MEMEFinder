@@ -85,7 +85,12 @@ class OCRProcessor:
                 logger.info(f"  将使用GPU加速模式")
             else:
                 logger.info("✗ 未检测到GPU，将使用CPU模式")
-                logger.info("  提示: 如需使用GPU，请确保已安装 onnxruntime-gpu")
+                if gpu_info and "不可用" in str(gpu_info):
+                    # GPU 硬件存在但初始化测试失败
+                    logger.warning(f"  原因: {gpu_info}")
+                    logger.info("  为了程序稳定性，已自动切换到CPU模式")
+                else:
+                    logger.info("  提示: 如需使用GPU，请确保已安装 onnxruntime-gpu")
         else:
             # 手动指定了GPU使用
             if use_gpu:
@@ -148,11 +153,28 @@ class OCRProcessor:
                 cls_model = None
             
             # 构建RapidOCR初始化参数
+            # 注意：GPU模式可能导致初始化失败，需要做好异常处理
             rapidocr_kwargs = {
                 'det_use_cuda': use_gpu,  # 检测模型是否使用CUDA
                 'cls_use_cuda': use_gpu,   # 方向分类是否使用CUDA  
                 'rec_use_cuda': use_gpu,   # 识别模型是否使用CUDA
             }
+            
+            # 如果启用GPU，尝试验证CUDA是否可用
+            if use_gpu:
+                try:
+                    import onnxruntime as ort
+                    available_providers = ort.get_available_providers()
+                    if 'CUDAExecutionProvider' not in available_providers:
+                        logger.warning("⚠ CUDA不可用，将自动切换到CPU模式")
+                        logger.warning(f"  可用提供者: {available_providers}")
+                        use_gpu = False
+                        rapidocr_kwargs['det_use_cuda'] = False
+                        rapidocr_kwargs['cls_use_cuda'] = False
+                        rapidocr_kwargs['rec_use_cuda'] = False
+                except Exception as e:
+                    logger.warning(f"⚠ 检查CUDA可用性失败: {e}")
+                    logger.warning("  将尝试使用GPU模式，如失败将回退到CPU")
             
             # 设置模型文件的标准路径（如果还没有找到本地模型）
             if not det_model:
@@ -204,10 +226,89 @@ class OCRProcessor:
             logger.info(f"  识别模型: {rec_model}")
             logger.info(f"  方向分类: {cls_model}")
             
-            self.ocr = RapidOCR(**rapidocr_kwargs)
+            # 尝试初始化 RapidOCR，如果GPU模式失败则自动回退到CPU
+            ocr_initialized = False
+            last_error = None
             
-            if self.ocr is None:
-                raise Exception("RapidOCR 初始化返回 None")
+            try:
+                logger.info(f"尝试初始化 RapidOCR ({'GPU' if use_gpu else 'CPU'} 模式)...")
+                self.ocr = RapidOCR(**rapidocr_kwargs)
+                
+                if self.ocr is None:
+                    raise Exception("RapidOCR 初始化返回 None")
+                
+                # 尝试进行一个简单的测试以确保OCR真的可用
+                # 这可以捕获一些延迟的初始化错误
+                ocr_initialized = True
+                logger.info("✓ RapidOCR 对象创建成功")
+                
+            except Exception as e:
+                last_error = e
+                error_msg = str(e)
+                logger.error(f"✗ RapidOCR 初始化失败: {error_msg}")
+                
+                # 分析错误原因并给出建议
+                if use_gpu:
+                    logger.warning("=" * 60)
+                    logger.warning("⚠ GPU模式初始化失败")
+                    logger.warning("=" * 60)
+                    
+                    # 分析具体错误
+                    if "CUDA" in error_msg or "cuda" in error_msg:
+                        logger.warning("错误类型: CUDA相关")
+                        logger.warning("可能原因:")
+                        logger.warning("  1. CUDA版本与onnxruntime-gpu不匹配")
+                        logger.warning("  2. 缺少cuDNN库")
+                        logger.warning("  3. CUDA驱动损坏")
+                        logger.warning("")
+                        logger.warning("修复建议:")
+                        logger.warning("  1. 检查CUDA版本: nvidia-smi")
+                        logger.warning("  2. 重新安装onnxruntime-gpu:")
+                        logger.warning("     pip uninstall onnxruntime onnxruntime-gpu")
+                        logger.warning("     pip install onnxruntime-gpu")
+                        logger.warning("  3. 或者使用CPU模式（稳定可靠）")
+                    elif "DLL" in error_msg or "load" in error_msg:
+                        logger.warning("错误类型: 库文件加载失败")
+                        logger.warning("可能原因:")
+                        logger.warning("  1. 缺少必要的DLL文件")
+                        logger.warning("  2. Visual C++ 运行库未安装")
+                        logger.warning("")
+                        logger.warning("修复建议:")
+                        logger.warning("  1. 安装 Visual C++ Redistributable")
+                        logger.warning("  2. 使用CPU模式")
+                    else:
+                        logger.warning("错误类型: 未知")
+                        logger.warning("建议使用CPU模式以保证程序稳定运行")
+                    
+                    logger.warning("=" * 60)
+                    logger.warning("正在自动切换到CPU模式...")
+                    logger.warning("=" * 60)
+                    
+                    try:
+                        # 切换到CPU模式
+                        rapidocr_kwargs['det_use_cuda'] = False
+                        rapidocr_kwargs['cls_use_cuda'] = False
+                        rapidocr_kwargs['rec_use_cuda'] = False
+                        use_gpu = False
+                        
+                        logger.info("重新尝试初始化 RapidOCR (CPU 模式)...")
+                        self.ocr = RapidOCR(**rapidocr_kwargs)
+                        
+                        if self.ocr is None:
+                            raise Exception("RapidOCR 初始化返回 None")
+                        
+                        ocr_initialized = True
+                        logger.info("✓ CPU模式初始化成功")
+                        
+                    except Exception as cpu_error:
+                        logger.error(f"✗ CPU模式也初始化失败: {cpu_error}")
+                        raise Exception(f"RapidOCR 初始化完全失败 - GPU错误: {last_error}, CPU错误: {cpu_error}")
+                else:
+                    # 如果本来就是CPU模式，直接抛出错误
+                    raise
+            
+            if not ocr_initialized or self.ocr is None:
+                raise Exception("RapidOCR 初始化失败")
             
             # 验证实际使用的设备
             actual_device = "未知"

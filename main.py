@@ -9,6 +9,19 @@ import sys
 import os
 from pathlib import Path
 
+# 应用运行时补丁 - 必须在导入其他模块之前执行
+try:
+    # 标准输出重定向补丁（避免打包后的控制台输出问题）
+    import stdout_stderr_patch
+except:
+    pass
+
+try:
+    # SnowNLP 数据路径补丁（确保打包后能加载情绪分析模型）
+    import snownlp_runtime_patch
+except:
+    pass
+
 # 添加src目录到路径
 src_path = Path(__file__).parent / 'src'
 sys.path.insert(0, str(src_path))

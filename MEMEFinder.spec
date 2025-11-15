@@ -13,11 +13,19 @@ datas = [
 # 添加models目录（如果存在）
 models_dir = Path('models')
 if models_dir.exists():
-    # 检查是否有onnx模型文件
+    # 检查是否有onnx模型文件或snownlp数据
     onnx_files = list(models_dir.glob('*.onnx'))
-    if onnx_files:
-        print(f"[SPEC] 找到 {len(onnx_files)} 个ONNX模型文件，将打包到应用中")
-        # 添加models目录
+    snownlp_dir = models_dir / 'snownlp'
+    has_snownlp = snownlp_dir.exists() and any(snownlp_dir.rglob('*.marshal'))
+    
+    if onnx_files or has_snownlp:
+        if onnx_files:
+            print(f"[SPEC] 找到 {len(onnx_files)} 个ONNX模型文件")
+        if has_snownlp:
+            snownlp_files = len(list(snownlp_dir.rglob('*')))
+            print(f"[SPEC] 找到 SnowNLP 数据文件 ({snownlp_files} 个文件)")
+        print(f"[SPEC] 将打包 models 目录到应用中")
+        # 添加models目录（包括所有子目录和文件）
         datas.append(('models', 'models'))
     else:
         print("[SPEC] models目录存在但没有模型文件，请先运行: python copy_models.py")
