@@ -31,6 +31,7 @@ ENV/
 # ===============================
 build/
 dist/
+releases/
 *.exe
 !installer/*.exe
 
@@ -38,10 +39,15 @@ dist/
 installer/installer/
 installer/*.exe
 
+# PyInstaller generated spec files (keep template)
+MEMEFinder_cpu.spec
+MEMEFinder_gpu-cuda11.spec
+MEMEFinder_gpu-cuda12.spec
+
 # ===============================
 # Project-specific Data
 # ===============================
-# Images and media
+# Images and media (test data)
 imgs/
 out/
 *.zip
@@ -63,6 +69,9 @@ models/**/*.pdmodel
 models/**/*.onnx
 !models/README.md
 
+# Version recommendation output
+推荐版本.txt
+
 # ===============================
 # Logs and Temporary Files
 # ===============================
@@ -72,6 +81,9 @@ logs/
 *.temp
 *.bak
 error_log.txt
+
+# Version config (generated during build)
+src/version_config.json
 
 # ===============================
 # OS and System Files
