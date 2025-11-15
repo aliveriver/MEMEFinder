@@ -270,6 +270,38 @@ def create_release_package():
     )
     print("✓ 创建 启动MEMEFinder.bat")
     
+    # 创建CPU模式启动批处理
+    cpu_launcher_bat = dist_dir / '启动_CPU模式.bat'
+    cpu_launcher_bat.write_text(
+        '@echo off\n'
+        'REM MEMEFinder CPU模式启动脚本\n'
+        'REM\n'
+        'REM 如果你在使用GPU模式时遇到闪退或卡死问题，\n'
+        'REM 可以使用此脚本强制使用CPU模式启动程序\n'
+        '\n'
+        'echo ================================================\n'
+        'echo   MEMEFinder - CPU 模式启动\n'
+        'echo ================================================\n'
+        'echo.\n'
+        'echo 正在以 CPU 模式启动 MEMEFinder...\n'
+        'echo 注意: CPU 模式比 GPU 模式慢 2-3 倍\n'
+        'echo.\n'
+        '\n'
+        'REM 设置环境变量强制使用CPU模式\n'
+        'set MEMEFINDER_FORCE_CPU=1\n'
+        '\n'
+        'REM 启动程序\n'
+        'start "" "%~dp0MEMEFinder.exe"\n'
+        '\n'
+        'echo.\n'
+        'echo 程序已启动！\n'
+        'echo 如需恢复 GPU 模式，请直接双击 MEMEFinder.exe\n'
+        'echo.\n'
+        'pause\n',
+        encoding='utf-8'
+    )
+    print("✓ 创建 启动_CPU模式.bat")
+    
     # 创建使用说明文件
     usage_txt = dist_dir / '使用说明.txt'
     usage_content = """═══════════════════════════════════════════════════════
@@ -309,6 +341,10 @@ def create_release_package():
 
 Q: 程序无法启动？
 A: 请确保系统是 Windows 10/11 64位，并检查是否有杀毒软件拦截
+
+Q: 程序启动时卡住或闪退（GPU用户）？
+A: 这可能是GPU环境兼容性问题，请使用「启动_CPU模式.bat」启动程序
+   CPU模式稳定性更好，速度略慢但不影响正常使用
 
 Q: OCR 识别失败？
 A: 请确保已下载模型（首次运行会自动下载），检查网络连接

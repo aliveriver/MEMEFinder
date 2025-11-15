@@ -9,6 +9,7 @@ import re
 import tempfile
 import gc
 import os
+import threading
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 
@@ -28,6 +29,22 @@ from utils.gpu_detector import should_use_gpu, detect_gpu
 
 logger = get_logger()
 resource_monitor = get_resource_monitor()
+
+
+def _init_rapidocr_with_timeout(kwargs_dict, result_container, timeout=30):
+    """
+    在单独线程中初始化RapidOCR，带超时控制
+    
+    Args:
+        kwargs_dict: RapidOCR初始化参数
+        result_container: 用于存储结果的字典 {'ocr': None, 'error': None}
+        timeout: 超时时间（秒）
+    """
+    try:
+        ocr_instance = RapidOCR(**kwargs_dict)
+        result_container['ocr'] = ocr_instance
+    except Exception as e:
+        result_container['error'] = e
 
 
 class OCRProcessor:
@@ -75,6 +92,12 @@ class OCRProcessor:
         
         logger.info(f"模型存储路径: {model_dir}")
         logger.info(f"环境变量 RAPIDOCR_HOME: {os.environ.get('RAPIDOCR_HOME', '未设置')}")
+
+        # 检查是否通过环境变量强制使用 CPU 模式
+        force_cpu = os.environ.get('MEMEFINDER_FORCE_CPU', '').lower() in ('1', 'true', 'yes')
+        if force_cpu:
+            logger.info("检测到环境变量 MEMEFINDER_FORCE_CPU，强制使用 CPU 模式")
+            use_gpu = False
 
         # 自动检测GPU（如果未指定）
         if use_gpu is None:
@@ -232,7 +255,40 @@ class OCRProcessor:
             
             try:
                 logger.info(f"尝试初始化 RapidOCR ({'GPU' if use_gpu else 'CPU'} 模式)...")
-                self.ocr = RapidOCR(**rapidocr_kwargs)
+                
+                # 使用超时机制初始化RapidOCR（特别针对GPU模式可能卡住的问题）
+                if use_gpu:
+                    logger.info("使用超时保护机制（30秒）防止GPU初始化卡死...")
+                    logger.warning("  如果初始化超时，程序将自动切换到CPU模式")
+                    
+                    result_container = {'ocr': None, 'error': None}
+                    thread = threading.Thread(
+                        target=_init_rapidocr_with_timeout, 
+                        args=(rapidocr_kwargs, result_container),
+                        daemon=True  # 设置为守护线程，主程序退出时自动终止
+                    )
+                    thread.start()
+                    thread.join(timeout=30)  # 30秒超时
+                    
+                    if thread.is_alive():
+                        # 超时了，线程还在运行
+                        logger.error("✗ GPU模式初始化超时（30秒）")
+                        logger.warning("  GPU 初始化线程仍在运行，将被放弃")
+                        logger.warning("  这通常是由于打包后的程序缺少CUDA相关的DLL文件")
+                        logger.warning("  或者GPU驱动存在问题")
+                        # 不抛出异常，而是设置错误让后面的逻辑处理
+                        result_container['error'] = TimeoutError("RapidOCR GPU初始化超时")
+                    
+                    if result_container['error']:
+                        raise result_container['error']
+                    
+                    self.ocr = result_container['ocr']
+                    
+                    if self.ocr is None:
+                        raise Exception("RapidOCR GPU 初始化返回 None")
+                else:
+                    # CPU模式，直接初始化
+                    self.ocr = RapidOCR(**rapidocr_kwargs)
                 
                 if self.ocr is None:
                     raise Exception("RapidOCR 初始化返回 None")
@@ -254,7 +310,17 @@ class OCRProcessor:
                     logger.warning("=" * 60)
                     
                     # 分析具体错误
-                    if "CUDA" in error_msg or "cuda" in error_msg:
+                    if "Timeout" in error_msg or "超时" in error_msg:
+                        logger.warning("错误类型: 初始化超时")
+                        logger.warning("可能原因:")
+                        logger.warning("  1. 打包后的程序缺少CUDA相关的DLL文件")
+                        logger.warning("  2. GPU驱动存在问题或版本不兼容")
+                        logger.warning("  3. onnxruntime-gpu加载CUDA库时卡住")
+                        logger.warning("")
+                        logger.warning("说明:")
+                        logger.warning("  这是打包程序在某些GPU环境下的已知问题")
+                        logger.warning("  程序将自动切换到CPU模式，不影响使用")
+                    elif "CUDA" in error_msg or "cuda" in error_msg:
                         logger.warning("错误类型: CUDA相关")
                         logger.warning("可能原因:")
                         logger.warning("  1. CUDA版本与onnxruntime-gpu不匹配")

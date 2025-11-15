@@ -2,6 +2,8 @@
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 from pathlib import Path
+import os
+import sys
 
 # 数据文件列表
 datas = [
@@ -34,6 +36,78 @@ else:
     print("[SPEC]    打包将继续，但运行时可能需要下载模型")
 
 binaries = []
+
+# ==================== 关键修复：手动添加 ONNX Runtime GPU DLL 文件 ====================
+print("[SPEC] 检查并收集 ONNX Runtime GPU 依赖...")
+try:
+    import onnxruntime as ort
+    ort_path = Path(ort.__file__).parent
+    ort_capi_path = ort_path / 'capi'
+    
+    # 检查是否是 GPU 版本
+    providers = ort.get_available_providers()
+    is_gpu_version = 'CUDAExecutionProvider' in providers or 'TensorrtExecutionProvider' in providers
+    
+    if is_gpu_version:
+        print(f"[SPEC] ✓ 检测到 ONNX Runtime GPU 版本")
+        print(f"[SPEC]   支持的 Providers: {providers}")
+        print(f"[SPEC]   ONNX Runtime 路径: {ort_path}")
+        
+        # 收集所有 DLL 文件
+        if ort_capi_path.exists():
+            dll_files = list(ort_capi_path.glob('*.dll'))
+            if dll_files:
+                print(f"[SPEC]   找到 {len(dll_files)} 个 DLL 文件:")
+                for dll in dll_files:
+                    # 添加到 binaries，目标路径为 onnxruntime/capi/
+                    binaries.append((str(dll), 'onnxruntime/capi'))
+                    print(f"[SPEC]     - {dll.name}")
+                print(f"[SPEC] ✓ 已添加 ONNX Runtime GPU DLL 到打包列表")
+            else:
+                print(f"[SPEC] ⚠️ 警告: capi 目录下没有找到 DLL 文件")
+        else:
+            print(f"[SPEC] ⚠️ 警告: capi 目录不存在: {ort_capi_path}")
+        
+        # 同时检查是否需要添加 CUDA 运行库 DLL
+        # 注意：这些 DLL 通常在系统 PATH 中，但为了保险起见，我们也尝试收集
+        cuda_dll_names = [
+            'cudart64_*.dll',
+            'cublas64_*.dll', 
+            'cublasLt64_*.dll',
+            'cudnn64_*.dll',
+            'cudnn_*.dll',
+        ]
+        
+        # 搜索 CUDA DLL（在 onnxruntime 或系统路径中）
+        found_cuda_dlls = []
+        for pattern in cuda_dll_names:
+            # 先在 onnxruntime 目录搜索
+            cuda_dlls = list(ort_path.rglob(pattern))
+            if cuda_dlls:
+                for dll in cuda_dlls:
+                    binaries.append((str(dll), '.'))
+                    found_cuda_dlls.append(dll.name)
+        
+        if found_cuda_dlls:
+            print(f"[SPEC] ✓ 找到并添加 CUDA 运行库 DLL:")
+            for dll_name in found_cuda_dlls:
+                print(f"[SPEC]     - {dll_name}")
+        else:
+            print(f"[SPEC] ⚠️ 注意: 未在 onnxruntime 目录找到 CUDA 运行库 DLL")
+            print(f"[SPEC]         GPU 功能依赖系统已安装的 CUDA 运行库")
+            print(f"[SPEC]         如果目标机器没有 CUDA，程序会自动降级到 CPU 模式")
+    else:
+        print(f"[SPEC] 检测到 ONNX Runtime CPU 版本")
+        print(f"[SPEC]   支持的 Providers: {providers}")
+        print(f"[SPEC]   打包的程序将只支持 CPU 模式")
+        
+except ImportError:
+    print("[SPEC] ⚠️ onnxruntime 未安装，跳过 GPU DLL 收集")
+except Exception as e:
+    print(f"[SPEC] ⚠️ 收集 ONNX Runtime GPU DLL 时出错: {e}")
+    print(f"[SPEC]    将继续打包，但 GPU 功能可能不可用")
+
+print("[SPEC] " + "=" * 60)
 
 hiddenimports = [
     'unittest', 'unittest.mock', 'doctest',
