@@ -3,11 +3,27 @@ from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 from pathlib import Path
 
+# 数据文件列表
 datas = [
     ('src', 'src'), 
     ('README.md', '.'), 
     ('LICENSE', '.'),
 ]
+
+# 添加models目录（如果存在）
+models_dir = Path('models')
+if models_dir.exists():
+    # 检查是否有onnx模型文件
+    onnx_files = list(models_dir.glob('*.onnx'))
+    if onnx_files:
+        print(f"[SPEC] 找到 {len(onnx_files)} 个ONNX模型文件，将打包到应用中")
+        # 添加models目录
+        datas.append(('models', 'models'))
+    else:
+        print("[SPEC] models目录存在但没有模型文件，请先运行: python copy_models.py")
+else:
+    print("[SPEC] ⚠️ models目录不存在！请先运行: python copy_models.py")
+    print("[SPEC]    打包将继续，但运行时可能需要下载模型")
 
 binaries = []
 

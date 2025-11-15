@@ -18,9 +18,10 @@ from ..core.ocr_processor import OCRProcessor
 class ProcessTab:
     """图片处理标签页"""
     
-    def __init__(self, parent, db: ImageDatabase):
+    def __init__(self, parent, db: ImageDatabase, stats_callback=None):
         self.parent = parent
         self.db = db
+        self.stats_callback = stats_callback  # 用于更新统计信息的回调函数
         
         # OCR处理器（延迟初始化）
         self.ocr_processor = None
@@ -40,20 +41,13 @@ class ProcessTab:
         
         优先级：
         1. 环境变量 MEMEFINDER_USE_GPU (1/true/yes 启用，0/false/no 禁用)
-        2. 默认 False (使用CPU)
+        2. 自动检测GPU是否可用
         
         Returns:
             bool: 是否使用GPU
         """
-        # 检查环境变量
-        env_use_gpu = os.environ.get('MEMEFINDER_USE_GPU', '').lower()
-        if env_use_gpu in ('1', 'true', 'yes', 'on'):
-            return True
-        elif env_use_gpu in ('0', 'false', 'no', 'off', ''):
-            return False
-        
-        # 默认使用CPU
-        return False
+        from ..utils.gpu_detector import should_use_gpu
+        return should_use_gpu()
     
     def create_widgets(self):
         """创建界面组件"""
@@ -96,8 +90,14 @@ class ProcessTab:
         if self.ocr_processor is None:
             try:
                 self.log_message("[INFO] 正在初始化 OCR 模型...")
-                use_gpu = self._should_use_gpu()
-                self.ocr_processor = OCRProcessor(use_gpu=use_gpu)
+                from pathlib import Path
+                
+                # 获取项目根目录的models文件夹
+                project_root = Path(__file__).parent.parent.parent
+                model_dir = project_root / 'models'
+                
+                # 使用自动GPU检测和指定的模型目录
+                self.ocr_processor = OCRProcessor(use_gpu=None, model_dir=model_dir)
                 self._ocr_initialized = True
                 self.log_message("[INFO] OCR 模型加载完成")
                 return True
@@ -216,6 +216,13 @@ class ProcessTab:
                         neg_score=result['emotion_negative']
                     )
                     
+                    # 更新统计信息（调用回调函数）
+                    if self.stats_callback:
+                        try:
+                            self.frame.after(0, self.stats_callback)
+                        except Exception:
+                            pass
+                    
                     # 日志输出
                     if result['filtered_text']:
                         self.log_message(f"  ✓ 识别文本: {result['filtered_text'][:50]}")
@@ -236,6 +243,14 @@ class ProcessTab:
                 self.db.set_app_state('processing_state', 'idle')
             except Exception:
                 pass
+            
+            # 最后一次更新统计信息
+            if self.stats_callback:
+                try:
+                    self.frame.after(0, self.stats_callback)
+                except Exception:
+                    pass
+            
             # 线程安全地更新UI
             self.frame.after(0, lambda: self.progress_var.set(100))
             self.frame.after(0, lambda: self.progress_label.config(

@@ -10,7 +10,7 @@ import tempfile
 import gc
 import os
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 
 import numpy as np
 from PIL import Image
@@ -24,6 +24,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.logger import get_logger
 from utils.resource_monitor import get_resource_monitor
+from utils.gpu_detector import should_use_gpu, detect_gpu
 
 logger = get_logger()
 resource_monitor = get_resource_monitor()
@@ -32,15 +33,16 @@ resource_monitor = get_resource_monitor()
 class OCRProcessor:
     """OCR处理器 - 使用 RapidOCR（轻量级，易于打包）"""
 
-    def __init__(self, lang: str = 'ch', use_gpu: bool = False, det_side: int = 1536, use_senta: bool = True):
+    def __init__(self, lang: str = 'ch', use_gpu: Optional[bool] = None, det_side: int = 1536, use_senta: bool = True, model_dir: Optional[Path] = None):
         """
         初始化OCR处理器
 
         Args:
             lang: 语言，默认'ch'（中文）- RapidOCR会忽略此参数，因为它已内置多语言支持
-            use_gpu: 是否使用GPU - RapidOCR ONNX版本已优化，CPU性能很好
+            use_gpu: 是否使用GPU，None表示自动检测
             det_side: 检测侧边长度，默认1536（可降低以减少内存）
             use_senta: 是否使用情绪分析模型，默认True（优先使用 SnowNLP，快速且准确）
+            model_dir: 模型存储目录，None表示使用默认路径（根目录的models文件夹）
         """
         logger.info("=" * 60)
         logger.info("初始化 OCR 处理器（RapidOCR）...")
@@ -52,31 +54,194 @@ class OCRProcessor:
         self._process_count = 0
         self._gc_interval = 10  # 每处理10张图片执行一次垃圾回收
 
+        # 设置模型存储路径
+        if model_dir is None:
+            # 默认使用项目根目录的models文件夹
+            project_root = Path(__file__).parent.parent.parent
+            model_dir = project_root / 'models'
+        
+        # 确保模型目录存在
+        model_dir = Path(model_dir)
+        model_dir.mkdir(parents=True, exist_ok=True)
+        
+        # RapidOCR模型存储路径设置
+        # RapidOCR会将模型下载到用户目录下的.rapidocr文件夹
+        # 我们需要通过环境变量或符号链接来重定向到我们的目录
+        # 设置RAPIDOCR_HOME环境变量（如果RapidOCR支持）
+        os.environ['RAPIDOCR_HOME'] = str(model_dir)
+        
+        # 也尝试设置可能的其他环境变量
+        os.environ['RAPIDOCR_MODEL_DIR'] = str(model_dir)
+        
+        logger.info(f"模型存储路径: {model_dir}")
+        logger.info(f"环境变量 RAPIDOCR_HOME: {os.environ.get('RAPIDOCR_HOME', '未设置')}")
+
+        # 自动检测GPU（如果未指定）
+        if use_gpu is None:
+            has_gpu, gpu_info = detect_gpu()
+            use_gpu = should_use_gpu()
+            if has_gpu:
+                logger.info(f"✓ 检测到GPU: {gpu_info}")
+                logger.info(f"  将使用GPU加速模式")
+            else:
+                logger.info("✗ 未检测到GPU，将使用CPU模式")
+                logger.info("  提示: 如需使用GPU，请确保已安装 onnxruntime-gpu")
+        else:
+            # 手动指定了GPU使用
+            if use_gpu:
+                has_gpu, gpu_info = detect_gpu()
+                if has_gpu:
+                    logger.info(f"✓ 手动启用GPU模式: {gpu_info}")
+                else:
+                    logger.warning("⚠ 手动启用了GPU，但系统可能不支持，将尝试使用GPU")
+            else:
+                logger.info("手动禁用GPU，使用CPU模式")
+        
         # 初始化 RapidOCR
         logger.info("正在初始化 RapidOCR...")
         try:
-            # RapidOCR 初始化非常简单，无需复杂配置
-            # use_cuda=True 可以启用GPU加速（如果支持）
-            # use_angle_cls=True 启用文本方向分类
-            # print_verbose=False 不打印详细日志
-            self.ocr = RapidOCR(
-                det_use_cuda=use_gpu,  # 检测模型是否使用CUDA
-                cls_use_cuda=use_gpu,  # 方向分类是否使用CUDA  
-                rec_use_cuda=use_gpu   # 识别模型是否使用CUDA
-            )
+            # 确保模型目录存在
+            model_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 检查models目录下是否已有模型文件
+            existing_models = list(model_dir.rglob('*.onnx'))
+            if existing_models:
+                # 如果已有模型文件，尝试使用它们
+                model_names = {f.name.lower(): f for f in existing_models}
+                det_model = None
+                rec_model = None
+                cls_model = None
+                
+                # 查找检测模型
+                for name, path in model_names.items():
+                    if 'det' in name and 'infer' in name:
+                        det_model = path
+                        break
+                
+                # 查找识别模型
+                for name, path in model_names.items():
+                    if 'rec' in name and 'infer' in name:
+                        rec_model = path
+                        break
+                
+                # 查找分类模型（可选）
+                for name, path in model_names.items():
+                    if 'cls' in name and 'infer' in name:
+                        cls_model = path
+                        break
+                
+                if det_model and rec_model:
+                    logger.info(f"✓ 找到本地模型文件，使用本地模型")
+                    logger.info(f"  检测模型: {det_model.name}")
+                    logger.info(f"  识别模型: {rec_model.name}")
+                    if cls_model:
+                        logger.info(f"  方向分类: {cls_model.name}")
+                else:
+                    logger.info(f"模型文件不完整，RapidOCR将自动下载缺失的模型")
+                    det_model = None
+                    rec_model = None
+                    cls_model = None
+            else:
+                logger.info(f"模型文件不存在，RapidOCR将在首次使用时自动下载到: {model_dir}")
+                det_model = None
+                rec_model = None
+                cls_model = None
+            
+            # 构建RapidOCR初始化参数
+            rapidocr_kwargs = {
+                'det_use_cuda': use_gpu,  # 检测模型是否使用CUDA
+                'cls_use_cuda': use_gpu,   # 方向分类是否使用CUDA  
+                'rec_use_cuda': use_gpu,   # 识别模型是否使用CUDA
+            }
+            
+            # 设置模型文件的标准路径（如果还没有找到本地模型）
+            if not det_model:
+                det_model = model_dir / 'ch_PP-OCRv4_det_infer.onnx'
+            if not rec_model:
+                rec_model = model_dir / 'ch_PP-OCRv4_rec_infer.onnx'
+            if not cls_model:
+                # 注意文件名可能有两种格式
+                cls_model_v2 = model_dir / 'ch_ppocr_mobile_v2.0_cls_infer.onnx'
+                cls_model_old = model_dir / 'ch_ppocr_mobile_v2_cls_infer.onnx'
+                if cls_model_v2.exists():
+                    cls_model = cls_model_v2
+                elif cls_model_old.exists():
+                    cls_model = cls_model_old
+                else:
+                    cls_model = cls_model_v2  # 默认使用v2.0版本
+            
+            # 检查模型文件是否存在，如果不存在则给出明确提示
+            missing_models = []
+            if not det_model.exists():
+                missing_models.append(f"检测模型: {det_model.name}")
+            if not rec_model.exists():
+                missing_models.append(f"识别模型: {rec_model.name}")
+            if not cls_model.exists():
+                missing_models.append(f"方向分类: {cls_model.name}")
+            
+            if missing_models:
+                logger.warning("=" * 60)
+                logger.warning("缺少以下模型文件，请手动下载到 models 目录:")
+                for model in missing_models:
+                    logger.warning(f"  - {model}")
+                logger.warning("")
+                logger.warning("下载方法1 - 从RapidOCR包复制:")
+                logger.warning("  运行: python copy_models.py")
+                logger.warning("")
+                logger.warning("下载方法2 - 从GitHub下载:")
+                logger.warning("  https://github.com/RapidAI/RapidOCR/tree/main/python/rapidocr_onnxruntime/models")
+                logger.warning("=" * 60)
+                raise FileNotFoundError(f"模型文件缺失: {', '.join([m.split(':')[1].strip() for m in missing_models])}")
+            
+            # 直接传递模型文件的绝对路径给RapidOCR
+            # 注意：这里不使用params参数，而是直接传递路径参数
+            rapidocr_kwargs['det_model_path'] = str(det_model)
+            rapidocr_kwargs['rec_model_path'] = str(rec_model)
+            rapidocr_kwargs['cls_model_path'] = str(cls_model)
+            
+            logger.info(f"模型路径配置:")
+            logger.info(f"  检测模型: {det_model}")
+            logger.info(f"  识别模型: {rec_model}")
+            logger.info(f"  方向分类: {cls_model}")
+            
+            self.ocr = RapidOCR(**rapidocr_kwargs)
             
             if self.ocr is None:
                 raise Exception("RapidOCR 初始化返回 None")
             
+            # 验证实际使用的设备
+            actual_device = "未知"
+            try:
+                # 尝试从OCR对象获取设备信息
+                if hasattr(self.ocr, 'det_model') and hasattr(self.ocr.det_model, 'session'):
+                    providers = self.ocr.det_model.session.get_providers()
+                    if 'CUDAExecutionProvider' in providers:
+                        actual_device = "GPU (CUDA)"
+                    elif 'DmlExecutionProvider' in providers:
+                        actual_device = "GPU (DirectML)"
+                    else:
+                        actual_device = "CPU"
+            except:
+                # 如果无法获取，使用我们设置的use_gpu值
+                actual_device = "GPU" if use_gpu else "CPU"
+            
             device_type = "GPU" if use_gpu else "CPU"
-            logger.info(f"✓ RapidOCR 初始化成功（{device_type} 模式）")
+            logger.info(f"✓ RapidOCR 初始化成功")
+            logger.info(f"  配置模式: {device_type}")
+            logger.info(f"  实际设备: {actual_device}")
             logger.info("RapidOCR 优势：轻量级、易打包、无复杂依赖")
+            
+            # 检查模型文件位置（初始化后再次检查）
+            self._check_model_location(model_dir)
             
         except Exception as e:
             error_msg = f"RapidOCR 初始化失败: {e}"
             logger.error(error_msg)
             raise Exception(error_msg)
 
+        # 保存模型目录路径供后续使用
+        self.model_dir = model_dir
+        
         # 初始化 Senta 情绪分析（可选）
         self._senta = None
         self._use_senta = False
@@ -87,6 +252,36 @@ class OCRProcessor:
         resource_monitor.log_resource_status()
         logger.info("OCR 处理器初始化完成")
         logger.info("=" * 60)
+    
+    def _check_model_location(self, target_dir: Path):
+        """
+        检查模型文件位置
+        
+        Args:
+            target_dir: 目标模型目录
+        """
+        try:
+            # 检查目标目录是否有模型文件
+            target_onnx = list(target_dir.rglob('*.onnx'))
+            if target_onnx:
+                total_size = sum(f.stat().st_size for f in target_onnx) / (1024 * 1024)
+                logger.info(f"✓ 模型文件已在目标目录: {target_dir}")
+                logger.info(f"  找到 {len(target_onnx)} 个模型文件，总大小: {total_size:.2f} MB")
+                
+                # 列出主要模型文件
+                main_models = ['det', 'rec', 'cls']
+                for model_type in main_models:
+                    model_files = [f for f in target_onnx if model_type.lower() in f.name.lower()]
+                    if model_files:
+                        logger.info(f"    - {model_type.upper()}: {model_files[0].name}")
+                return
+            
+            # 如果目标目录没有模型，检查是否在下载中
+            logger.info(f"模型文件将在首次使用时自动下载到: {target_dir}")
+            logger.info("  下载完成后，模型将保存在此目录，无需再次下载")
+                
+        except Exception as e:
+            logger.warning(f"检查模型位置时出错: {e}")
 
     def process_image(self, image_path: Path, pad_ratio: float = 0.10) -> Dict[str, Any]:
         """

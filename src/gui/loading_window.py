@@ -245,7 +245,7 @@ class ModelLoadingWindow(LoadingWindow):
     
     def __init__(self, parent=None):
         """初始化模型加载窗口"""
-        super().__init__(parent, title="初始化模型", message="正在检查模型...")
+        super().__init__(parent, title="MEMEFinder 初始化", message="正在准备表情包识别引擎...")
         
         self.download_thread = None
         self.load_thread = None
@@ -280,18 +280,18 @@ class ModelLoadingWindow(LoadingWindow):
     def _check_and_load_thread(self):
         """检查和加载线程"""
         try:
-            # 步骤1：检查PaddleOCR模型
-            self.set_progress(10, "正在检查模型...", "检查 PaddleOCR 模型是否已下载")
+            # 步骤1：检查模型
+            self.set_progress(10, "正在检查识别引擎...", "检查文字识别模型是否已下载到models文件夹")
             
             models_exist = self._check_models_exist()
             
             if not models_exist:
                 # 需要下载模型
-                self.set_progress(20, "正在下载模型...", "首次使用需要下载 OCR 模型，请稍候...")
+                self.set_progress(20, "正在下载识别模型...", "首次使用需要下载文字识别模型，请稍候...")
                 self._download_models()
             else:
                 # 模型已存在
-                self.set_progress(30, "模型已就绪", "开始加载模型...")
+                self.set_progress(30, "识别模型已就绪", "开始加载表情包识别引擎...")
             
             # 步骤2：加载OCR模型
             self._load_ocr_model()
@@ -300,7 +300,7 @@ class ModelLoadingWindow(LoadingWindow):
             self._load_sentiment_model()
             
             # 完成
-            self.set_progress(100, "加载完成", "模型已就绪")
+            self.set_progress(100, "初始化完成", "MEMEFinder 已就绪，可以开始使用")
             time.sleep(0.5)  # 短暂显示完成状态
             
             # 执行完成回调
@@ -308,8 +308,8 @@ class ModelLoadingWindow(LoadingWindow):
                 self.window.after(100, self.on_complete_callback)
             
         except Exception as e:
-            error_msg = f"模型加载失败: {str(e)}"
-            self.set_message("加载失败")
+            error_msg = f"初始化失败: {str(e)}"
+            self.set_message("初始化失败")
             self.set_detail(error_msg)
             
             if self.on_error_callback:
@@ -326,26 +326,43 @@ class ModelLoadingWindow(LoadingWindow):
             bool: 模型是否存在
         """
         try:
-            # 检查PaddleOCR默认模型路径
-            # PaddleOCR会将模型下载到用户目录下的 .paddleocr 文件夹
             from pathlib import Path
-            import os
             
-            # 获取用户主目录
+            # 检查项目根目录的models文件夹
+            project_root = Path(__file__).parent.parent.parent
+            models_dir = project_root / 'models'
+            
+            # 检查models目录下是否有.onnx模型文件
+            # RapidOCR模型文件通常以det、rec、cls等命名
+            if models_dir.exists():
+                onnx_files = list(models_dir.rglob('*.onnx'))
+                if onnx_files:
+                    # 检查是否包含主要的模型文件（检测、识别、分类）
+                    model_names = [f.name.lower() for f in onnx_files]
+                    has_det = any('det' in name for name in model_names)
+                    has_rec = any('rec' in name for name in model_names)
+                    # cls是可选的，所以不强制要求
+                    if has_det and has_rec:
+                        return True
+            
+            # 也检查用户目录下的默认路径（兼容旧版本）
             home_dir = Path.home()
-            paddleocr_dir = home_dir / '.paddleocr'
-            
-            # 检查常见的模型目录
-            model_paths = [
-                paddleocr_dir / '2.6' / 'ocr' / 'det' / 'ch',  # 检测模型
-                paddleocr_dir / '2.6' / 'ocr' / 'rec' / 'ch',  # 识别模型
-                paddleocr_dir / 'whl',  # 其他模型
+            default_paths = [
+                home_dir / '.rapidocr',
+                home_dir / '.RapidOCR',
+                home_dir / '.cache' / 'rapidocr',
             ]
             
-            # 如果任何一个路径存在且包含文件，则认为模型已下载
-            for model_path in model_paths:
-                if model_path.exists() and any(model_path.iterdir()):
-                    return True
+            for default_path in default_paths:
+                if default_path.exists():
+                    onnx_files = list(default_path.rglob('*.onnx'))
+                    if onnx_files:
+                        # 检查是否包含主要模型
+                        model_names = [f.name.lower() for f in onnx_files]
+                        has_det = any('det' in name for name in model_names)
+                        has_rec = any('rec' in name for name in model_names)
+                        if has_det and has_rec:
+                            return True
             
             return False
             
@@ -359,9 +376,9 @@ class ModelLoadingWindow(LoadingWindow):
         # 这里只是模拟进度显示
         
         progress_steps = [
-            (30, "正在下载检测模型...", "下载 ch_PP-OCRv3_det"),
-            (50, "正在下载识别模型...", "下载 ch_PP-OCRv3_rec"),
-            (70, "正在下载方向分类器...", "下载 ch_ppocr_mobile_v2.0_cls"),
+            (30, "正在下载文字检测模型...", "下载文字区域检测模型"),
+            (50, "正在下载文字识别模型...", "下载中文字符识别模型"),
+            (70, "正在下载方向分类器...", "下载图片方向识别模型"),
         ]
         
         for progress, message, detail in progress_steps:
@@ -371,28 +388,39 @@ class ModelLoadingWindow(LoadingWindow):
     def _load_ocr_model(self):
         """加载OCR模型"""
         try:
-            self.set_progress(75, "正在加载 OCR 模型...", "初始化 PaddleOCR")
+            # 检测GPU
+            from ..utils.gpu_detector import detect_gpu, should_use_gpu
+            has_gpu, gpu_info = detect_gpu()
+            use_gpu = should_use_gpu()
+            
+            if has_gpu and use_gpu:
+                self.set_progress(75, "正在加载文字识别引擎...", f"初始化表情包文字识别模块（{gpu_info}）")
+            else:
+                self.set_progress(75, "正在加载文字识别引擎...", "初始化表情包文字识别模块（CPU模式）")
             
             # 实际加载OCR模型
             from ..core.ocr_processor import OCRProcessor
-            import os
+            from pathlib import Path
             
-            # 检查是否启用GPU
-            env_use_gpu = os.environ.get('MEMEFINDER_USE_GPU', '').lower()
-            use_gpu = env_use_gpu in ('1', 'true', 'yes', 'on')
+            # 获取项目根目录的models文件夹
+            project_root = Path(__file__).parent.parent.parent
+            model_dir = project_root / 'models'
             
-            # 创建OCR处理器实例（这会触发实际的模型加载）
-            self._ocr_instance = OCRProcessor(use_gpu=use_gpu)
+            # 创建OCR处理器实例（会自动检测GPU并使用指定的模型目录）
+            # use_gpu=None表示自动检测
+            self._ocr_instance = OCRProcessor(use_gpu=None, model_dir=model_dir)
             
-            self.set_progress(90, "OCR 模型加载完成", "")
+            # 显示最终使用的设备
+            device_type = "GPU" if use_gpu else "CPU"
+            self.set_progress(90, "文字识别引擎加载完成", f"已准备好识别表情包中的文字（{device_type}模式）")
             
         except Exception as e:
-            raise Exception(f"OCR模型加载失败: {e}")
+            raise Exception(f"文字识别引擎加载失败: {e}")
     
     def _load_sentiment_model(self):
         """加载情感分析模型（可选）"""
         try:
-            self.set_progress(95, "正在检查情感分析模型...", "SnowNLP / TextBlob")
+            self.set_progress(95, "正在检查情绪分析模块...", "准备分析表情包情绪")
             
             # 检查是否安装了情感分析库
             has_snownlp = False
@@ -411,11 +439,11 @@ class ModelLoadingWindow(LoadingWindow):
                 pass
             
             if has_snownlp:
-                self.set_detail("使用 SnowNLP 进行情感分析")
+                self.set_detail("使用 SnowNLP 分析表情包情绪")
             elif has_textblob:
-                self.set_detail("使用 TextBlob 进行情感分析")
+                self.set_detail("使用 TextBlob 分析表情包情绪")
             else:
-                self.set_detail("使用关键词方法进行情感分析")
+                self.set_detail("使用关键词方法分析表情包情绪")
             
             time.sleep(0.5)
             

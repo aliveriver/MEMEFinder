@@ -45,7 +45,8 @@ class MemeFinderGUI:
         
         # 创建三个标签页
         self.source_tab = SourceTab(self.notebook, self.db)
-        self.process_tab = ProcessTab(self.notebook, self.db)
+        # 传递统计更新回调给process_tab
+        self.process_tab = ProcessTab(self.notebook, self.db, stats_callback=self.source_tab.update_statistics)
         self.search_tab = SearchTab(self.notebook, self.db)
         
         # 添加到笔记本
