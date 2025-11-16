@@ -167,7 +167,7 @@ class ProcessTab:
         """处理图片的线程"""
         try:
             # 获取未处理的图片
-            unprocessed = self.db.get_unprocessed_images(limit=1000)
+            unprocessed = self.db.get_unprocessed_images(limit=10000)
             
             if not unprocessed:
                 self.log_message("[INFO] 没有待处理的图片")
