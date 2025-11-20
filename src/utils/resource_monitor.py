@@ -18,6 +18,8 @@ class ResourceMonitor:
     def __init__(self):
         self.process = psutil.Process()
         self.initial_memory = self.get_memory_usage()
+        # 初始化CPU计数器（第一次调用返回0.0，后续调用返回自上次调用以来的平均值）
+        self.process.cpu_percent(interval=None)
     
     def get_memory_usage(self) -> Dict[str, Any]:
         """
@@ -42,8 +44,12 @@ class ResourceMonitor:
     def get_cpu_usage(self) -> float:
         """
         获取CPU使用率（百分比）
+        
+        注意：返回的是自上次调用以来的平均CPU使用率
         """
-        return self.process.cpu_percent(interval=0.1)
+        # 使用 interval=None 非阻塞模式，返回自上次调用以来的平均使用率
+        # 这样能更准确地反映两次日志记录之间的CPU负载
+        return self.process.cpu_percent(interval=None)
     
     def get_system_memory(self) -> Dict[str, Any]:
         """
