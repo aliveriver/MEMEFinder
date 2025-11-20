@@ -7,14 +7,7 @@
 
 ## 📚 完整文档
 
-本项目提供了详细的文档，请查看 **[📚 文档索引](文档索引.md)** 快速找到您需要的内容。
-
-**快速链接**：
-- 👤 [版本选择指南](版本选择指南.md) - 如何选择合适的版本
-- 🚀 [快速开始](docs/QUICK_START.md) - 首次使用教程
-- 💻 [发布教程](发布完整教程.md) - 开发者发布指南
-- 📋 [打包清单](打包检查清单.md) - 发布质量控制
-
+本项目提供了详细的文档，请查看 **[📚 项目概述](docs/项目概述.md)** 快速了解项目详情。
 ---
 
 ## 📁 主要文件与目录结构
@@ -25,11 +18,9 @@
 | `src/` | 源代码目录（含 `core/`, `gui/`, `utils/`） |
 | `scripts/` | 维护、打包和发布脚本 |
 | `docs/` | 用户文档、使用指南 |
-| `test/` | 测试代码 |
-| `installer/` | 安装程序配置 |
-| `requirements.txt` | Python 依赖列表 |
 | `models/` | 模型文件目录（运行时自动下载） |
-| `logs/` | 运行日志 |
+| `meme_finder.db` | SQLite 数据库文件（自动生成） |
+| `requirements.txt` | Python 依赖列表 |
 | `LICENSE` | 开源协议 |
 
 ---
@@ -38,52 +29,18 @@
 
 - **图源管理**：添加 / 删除 / 启用 / 禁用文件夹，显示添加时间与最后扫描时间  
 - **图片扫描**：递归扫描支持格式（jpg/png/bmp/webp/gif/tiff），自动 MD5 去重与增量扫描  
-- **OCR 识别（可选）**：使用 *PaddleOCR* 提取图片文字并保存到数据库  
-- **情绪分析（可选）**：使用 *PaddleNLP Senta* 对提取文本进行情绪分类  
+- **OCR 识别（可选）**：使用 *RapidOCR* 提取图片文字并保存到数据库  
+- **情绪分析（可选）**：使用 *SnowNLP* (中文) / *TextBlob* (英文) 对提取文本进行情绪分类  
 - **数据存储**：基于 SQLite 数据库，持久化图源与图片信息  
 - **GUI 界面**：基于 tkinter，包含三个标签页：
   - 图源管理  
   - 图片处理  
   - 图片搜索  
-- **打包支持**：自带 PyInstaller 打包脚本与批处理，生成独立 Windows 可执行包  
+- **打包支持**：自带 PyInstaller 打包脚本，生成独立 Windows 可执行包  
 
 ---
 
 ## 🚀 快速开始
-
-详细的快速入门指南请查看 [docs/QUICK_START.md](docs/QUICK_START.md)
-
-### 💾 下载可执行版本（推荐普通用户）
-
-MEMEFinder 提供3个预编译版本，无需安装Python即可使用：
-
-| 版本 | 适用人群 | 下载 | 大小 | 速度 |
-|------|---------|------|------|------|
-| **CPU通用版** | 所有用户（推荐） | [下载](releases) | ~150MB | 2-3秒/图 |
-| **GPU-CUDA11版** | GTX 10/16/20系列 | [下载](releases) | ~400MB | 0.5-1秒/图 |
-| **GPU-CUDA12版** | RTX 30/40系列 | [下载](releases) | ~450MB | 0.5-1秒/图 |
-
-#### 📋 如何选择版本？
-
-**方法1: 30秒快速选择**
-
-1. 打开命令提示符，运行: `nvidia-smi`
-2. 如果报错 → 下载 **CPU通用版**
-3. 如果显示 `CUDA Version: 11.x` → 下载 **GPU-CUDA11版**
-4. 如果显示 `CUDA Version: 12.x` → 下载 **GPU-CUDA12版**
-
-**方法2: 查看详细指南**
-
-查看 [版本选择指南.md](版本选择指南.md) 了解详细对比和推荐。
-
-**不确定？选CPU版本准没错！** ✅
-
-#### 📥 使用方法
-
-1. 下载对应版本的zip文件
-2. 解压到任意目录
-3. 运行 `MEMEFinder_xxx.exe`
-4. 浏览器会自动打开程序界面
 
 ### 源码运行（开发者）
 
@@ -105,13 +62,15 @@ MEMEFinder 提供3个预编译版本，无需安装Python即可使用：
 
    模型文件会在首次使用时自动下载。
 
-### 快捷脚本（Windows）
+### 打包发布
 
-项目提供了便捷的批处理脚本，位于 `scripts/` 目录：
+项目提供了便捷的打包脚本，位于 `scripts/` 目录：
 
-- **`运行_CPU模式.bat`** - 使用 CPU 模式运行（适合无 GPU 或 GPU 驱动问题）
-- **`系统检查.bat`** - 检查系统环境和依赖
-- **`清理项目.bat`** - 清理临时文件和缓存
+```bash
+python scripts/package_all.py
+```
+
+详细说明请参考 [scripts/README.md](scripts/README.md)。
 
 ---
 
@@ -120,7 +79,7 @@ MEMEFinder 提供3个预编译版本，无需安装Python即可使用：
 1. 打开「图源管理」 → 点击「添加图源文件夹」，选择包含表情包的目录（可多选）
 2. 点击「扫描新图片」进行增量扫描（自动去重）
 3. 切换到「图片处理」运行 OCR / 情绪分析任务（可暂停、停止、查看进度）
-4. 在「图片搜索」中通过关键词或情绪筛选查看结果，双击可打开图片或所在文件夹
+4. 在「图片搜索」中通过关键词或情绪筛选查看结果，单击可打开图片
 
 ---
 
@@ -130,70 +89,15 @@ MEMEFinder 提供3个预编译版本，无需安装Python即可使用：
     ├── core/            # 核心逻辑
     │   ├── database.py  # 数据库管理
     │   ├── scanner.py   # 文件扫描
-    │   └── ocr_processor.py  # OCR + 情绪分析
+    │   ├── ocr_engine.py # OCR 引擎封装
+    │   ├── emotion_analyzer.py # 情绪分析
+    │   └── ocr_processor.py  # OCR + 情绪分析处理流程
     ├── gui/             # 图形界面
     │   ├── main_window.py
     │   ├── source_tab.py
     │   ├── process_tab.py
     │   └── search_tab.py
     └── utils/           # 工具模块（日志与资源监控）
-
----
-
-## 🧱 打包与发布
-
-开发者可以使用 `scripts/` 目录中的脚本进行项目打包：
-
-### Windows 打包
-
-```bash
-# 方式 1: 使用批处理脚本
-scripts\打包发布版.bat
-
-# 方式 2: 使用 Python 脚本
-python scripts/build_release.py
-```
-
-### 打包准备
-
-在打包前，建议运行准备脚本：
-
-```bash
-python scripts/prepare_release.py
-```
-
-打包输出位于 `dist/MEMEFinder/`
-
-详细的打包说明请查看 [scripts/README.md](scripts/README.md)
-
----
-
-## 🧰 常见问题（FAQ）
-
-| 问题 | 解决方案 |
-| ---------- | --------------------------------------------------------- |
-| 程序无法启动 | 确认 Python 版本 ≥ 3.8 且依赖已安装，运行 `scripts/系统检查.bat` |
-| GPU 相关问题 | 查看 [docs/GPU使用指南.md](docs/GPU使用指南.md) 或使用 CPU 模式 |
-| OCR/情绪分析异常 | 模型会自动下载，如有问题请检查网络连接 |
-| 打包报错 | 运行 `scripts/清理项目.bat` 后重试 |
-
-更多问题请查看 [docs/](docs/) 目录下的相关文档。
-
----
-
-## 📚 文档导航
-
-### 用户文档
-- **[快速开始](docs/QUICK_START.md)** - 5分钟上手指南
-- **[用户指南](docs/USER_GUIDE.md)** - 完整使用教程
-- **[GPU 使用指南](docs/GPU使用指南.md)** - GPU 加速配置
-- **[GPU 快速指南](docs/GPU快速指南.md)** - GPU 快速入门
-- **[GPU 闪退修复](docs/GPU闪退修复指南.md)** - GPU 问题解决
-
-### 开发文档
-- **[优化指南](docs/OPTIMIZATION_GUIDE.md)** - 性能优化建议
-- **[脚本说明](scripts/README.md)** - 维护和打包脚本
-- **[历史文档](docs/archive/)** - 开发历史记录
 
 ---
 
@@ -208,7 +112,3 @@ python scripts/prepare_release.py
 
 本项目基于 **MIT License** 开源发布。
 详见 [`LICENSE`](LICENSE)。
-
----
-
-
