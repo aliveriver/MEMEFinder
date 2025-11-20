@@ -54,6 +54,9 @@ class MemeFinderGUI:
         self.notebook.add(self.process_tab.frame, text="图片处理")
         self.notebook.add(self.search_tab.frame, text="图片搜索")
         
+        # 绑定标签页切换事件，自动刷新搜索页
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        
         # 状态栏
         self.status_bar = ttk.Label(self.root, text="就绪", relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
@@ -61,6 +64,18 @@ class MemeFinderGUI:
     def update_status(self, message: str):
         """更新状态栏"""
         self.status_bar.config(text=message)
+    
+    def _on_tab_changed(self, event):
+        """标签页切换事件处理"""
+        try:
+            # 获取当前选中的标签页索引
+            current_tab =  self.notebook.index(self.notebook.select())
+            # 2 是搜索页的索引（0:图源管理， 1:图片处理，2:图片搜索）
+            if current_tab == 2:
+                # 切换到搜索页时自动刷新
+                self.search_tab.refresh_page()
+        except Exception:
+            pass
     
     def check_resume(self):
         """检查上次的处理状态并询问用户是否继续"""

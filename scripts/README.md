@@ -1,74 +1,92 @@
 # Scripts 目录说明
 
-此目录包含用于项目维护、打包和发布的辅助脚本。
+此目录包含用于项目打包和维护的辅助脚本。
 
-## 🎯 多版本打包（推荐）⭐
+## 📦 打包脚本
 
-### Python 脚本
-- **`build_multi_version.py`** - 多版本自动化构建工具（支持CPU、GPU-CUDA11、GPU-CUDA12）
-- **`recommend_version.py`** - 智能版本推荐工具，自动检测用户环境
+### `package_all.py` ⭐
+GPU 版本打包工具（包含 cuDNN 和 CUDA 运行时库）
 
-### 批处理脚本
-- **`打包所有版本.bat`** - 一键构建所有版本
-- **`选择版本打包.bat`** - 交互式版本选择打包
+**功能：**
+- 自动打包 MEMEFinder GPU 版本
+- 内置 GPU 加速库（cuDNN、cuBLAS等）
+- 支持自动降级到 CPU 模式
 
-### 快速开始
+**使用方法：**
 ```bash
-# 测试系统
-python test/test_multi_version.py
+# 激活 conda 环境
+conda activate MEME
 
-# 构建所有版本
-python scripts/build_multi_version.py --all
-
-# 推荐版本
-python scripts/recommend_version.py
+# 运行打包脚本
+python scripts/package_all.py
 ```
 
-详细说明请查看 [scripts/README.md](README.md)
+**输出位置：**
+- `releases/MEMEFinder_gpu/` - 打包后的程序
+
+**特性：**
+- ✅ GPU 加速（自动检测）
+- ✅ CPU 自动降级（无 GPU 时）
+- ✅ 包含所有必需的运行时库（cuDNN、CUDA）
+- ✅ 包含 AI 模型文件
 
 ---
 
-## 📦 打包和发布脚本
+## 🛠️ 维护脚本（可选）
 
-### Python 脚本
-- **`build_package.py`** - 构建发布包
-- **`build_release.py`** - 完整的发布构建流程
-- **`prepare_release.py`** - 准备发布前的检查和清理
+以下脚本为可选的维护工具，根据需要使用：
 
-### 批处理脚本
-- **`打包发布版.bat`** - Windows 一键打包脚本
-- **`准备发布.bat`** - 准备发布环境
+### `db_maintenance.py`
+数据库维护工具
 
-## 🛠️ 维护脚本
+### `prepare_release.py`
+发布前准备脚本
 
-### Python 脚本
-- **`clean_project.py`** - 清理项目临时文件和缓存
-- **`db_maintenance.py`** - 数据库维护工具
-- **`system_check.py`** - 系统环境检查
+### `system_check.py`
+系统环境检查工具
 
-### 批处理脚本
-- **`清理项目.bat`** - Windows 一键清理项目
-- **`数据库维护.bat`** - 数据库维护快捷方式
-- **`系统检查.bat`** - 系统环境检查快捷方式
+---
 
-## 🚀 运行脚本
+## 📝 注意事项
 
-- **`运行_CPU模式.bat`** - 强制使用 CPU 模式运行程序
-- **`运行_MEMEFinder_CPU模式.bat`** - MEMEFinder CPU 模式启动
+1. **环境依赖**
+   - 需要 `MEME` conda 环境
+   - 需要安装 PyInstaller：`pip install pyinstaller`
+   - 建议安装 cuDNN（用于 GPU 加速）
 
-## 使用方法
+2. **打包前检查**
+   - 确保 `models/` 目录包含 AI 模型文件
+   - 确保在项目根目录运行脚本
 
-### Windows 用户
-直接双击对应的 `.bat` 文件即可运行。
+3. **打包后测试**
+   - 检查 `releases/MEMEFinder_gpu/` 目录
+   - 运行 `启动程序.bat` 测试程序
 
-### 跨平台用户
-使用 Python 直接运行对应的 `.py` 脚本：
+---
+
+## 🚀 快速开始
+
 ```bash
-python scripts/script_name.py
+# 1. 激活环境
+conda activate MEME
+
+# 2. 打包程序
+python scripts/package_all.py
+
+# 3. 测试运行
+cd releases/MEMEFinder_gpu
+启动程序.bat
 ```
 
-## 注意事项
+---
 
-- 打包脚本需要先安装 PyInstaller：`pip install pyinstaller`
-- 部分脚本需要在项目根目录下运行
-- 建议在虚拟环境中使用这些脚本
+## 📂 项目结构
+
+```
+scripts/
+├── package_all.py          # GPU 版本打包脚本（核心）
+├── db_maintenance.py       # 数据库维护（可选）
+├── prepare_release.py      # 发布准备（可选）
+├── system_check.py         # 系统检查（可选）
+└── README.md              # 本文件
+```

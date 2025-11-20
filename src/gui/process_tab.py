@@ -13,6 +13,9 @@ import os
 
 from ..core.database import ImageDatabase
 from ..core.ocr_processor import OCRProcessor
+from ..utils.logger import get_logger
+
+logger = get_logger()
 
 
 class ProcessTab:
@@ -102,8 +105,12 @@ class ProcessTab:
                 self.log_message("[INFO] OCR 模型加载完成")
                 return True
             except Exception as e:
-                self.log_message(f"[错误] OCR 初始化失败: {e}")
-                messagebox.showerror("错误", f"OCR 初始化失败: {e}")
+                error_msg = f"OCR 初始化失败: {e}"
+                self.log_message(f"[错误] {error_msg}")
+                logger.error(error_msg)
+                import traceback
+                logger.debug(traceback.format_exc())
+                messagebox.showerror("错误", error_msg)
                 return False
         else:
             # 已经有预加载的实例
@@ -233,7 +240,11 @@ class ProcessTab:
                     processed_count += 1
                     
                 except Exception as e:
-                    self.log_message(f"  [错误] {e}")
+                    error_msg = f"处理图片失败 [{Path(img_path).name}]: {e}"
+                    self.log_message(f"  [错误] {error_msg}")
+                    logger.error(error_msg)
+                    import traceback
+                    logger.debug(traceback.format_exc())
                     error_count += 1
                     continue
             
@@ -267,9 +278,13 @@ class ProcessTab:
                 self.db.set_app_state('processing_state', 'idle')
             except Exception:
                 pass
-            self.log_message(f"[错误] 处理线程异常: {e}")
+            error_msg = f"处理线程异常: {e}"
+            self.log_message(f"[错误] {error_msg}")
+            logger.error(error_msg)
             import traceback
-            self.log_message(traceback.format_exc())
+            traceback_str = traceback.format_exc()
+            self.log_message(traceback_str)
+            logger.debug(traceback_str)
     
     def log_message(self, message: str):
         """添加日志消息（线程安全）"""

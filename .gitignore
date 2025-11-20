@@ -39,10 +39,8 @@ releases/
 installer/installer/
 installer/*.exe
 
-# PyInstaller generated spec files (keep template)
-MEMEFinder_cpu.spec
-MEMEFinder_gpu-cuda11.spec
-MEMEFinder_gpu-cuda12.spec
+# PyInstaller generated spec files (auto-generated during build)
+MEMEFinder_gpu.spec
 
 # ===============================
 # Project-specific Data

@@ -31,20 +31,6 @@ logger = get_logger()
 resource_monitor = get_resource_monitor()
 
 
-def _init_rapidocr_with_timeout(kwargs_dict, result_container, timeout=30):
-    """
-    在单独线程中初始化RapidOCR，带超时控制
-    
-    Args:
-        kwargs_dict: RapidOCR初始化参数
-        result_container: 用于存储结果的字典 {'ocr': None, 'error': None}
-        timeout: 超时时间（秒）
-    """
-    try:
-        ocr_instance = RapidOCR(**kwargs_dict)
-        result_container['ocr'] = ocr_instance
-    except Exception as e:
-        result_container['error'] = e
 
 
 class OCRProcessor:
@@ -256,42 +242,27 @@ class OCRProcessor:
             try:
                 logger.info(f"尝试初始化 RapidOCR ({'GPU' if use_gpu else 'CPU'} 模式)...")
                 
-                # 使用超时机制初始化RapidOCR（特别针对GPU模式可能卡住的问题）
-                if use_gpu:
-                    logger.info("使用超时保护机制（30秒）防止GPU初始化卡死...")
-                    logger.warning("  如果初始化超时，程序将自动切换到CPU模式")
-                    
-                    result_container = {'ocr': None, 'error': None}
-                    thread = threading.Thread(
-                        target=_init_rapidocr_with_timeout, 
-                        args=(rapidocr_kwargs, result_container),
-                        daemon=True  # 设置为守护线程，主程序退出时自动终止
-                    )
-                    thread.start()
-                    thread.join(timeout=30)  # 30秒超时
-                    
-                    if thread.is_alive():
-                        # 超时了，线程还在运行
-                        logger.error("✗ GPU模式初始化超时（30秒）")
-                        logger.warning("  GPU 初始化线程仍在运行，将被放弃")
-                        logger.warning("  这通常是由于打包后的程序缺少CUDA相关的DLL文件")
-                        logger.warning("  或者GPU驱动存在问题")
-                        # 不抛出异常，而是设置错误让后面的逻辑处理
-                        result_container['error'] = TimeoutError("RapidOCR GPU初始化超时")
-                    
-                    if result_container['error']:
-                        raise result_container['error']
-                    
-                    self.ocr = result_container['ocr']
+                # 直接初始化（移除守护线程机制以兼容打包环境）
+                # 注意：在打包后的环境中，守护线程可能导致GPU初始化失败
+                try:
+                    self.ocr = RapidOCR(**rapidocr_kwargs)
                     
                     if self.ocr is None:
-                        raise Exception("RapidOCR GPU 初始化返回 None")
-                else:
-                    # CPU模式，直接初始化
-                    self.ocr = RapidOCR(**rapidocr_kwargs)
+                        raise Exception("RapidOCR 初始化返回 None")
+                    
+                    # GPU模式下额外验证
+                    if use_gpu:
+                        logger.info("GPU 模式初始化成功，验证中...")
+                        # 不再使用超时机制，直接初始化可以避免线程问题
                 
-                if self.ocr is None:
-                    raise Exception("RapidOCR 初始化返回 None")
+                except Exception as init_error:
+                    # 如果是GPU模式失败，记录错误并准备降级
+                    if use_gpu:
+                        logger.error(f"✗ RapidOCR GPU 模式初始化失败: {init_error}")
+                        raise init_error  # 抛出异常，让外层捕获并降级到CPU
+                    else:
+                        # CPU模式失败就是真的失败了
+                        raise
                 
                 # 尝试进行一个简单的测试以确保OCR真的可用
                 # 这可以捕获一些延迟的初始化错误
@@ -620,11 +591,12 @@ class OCRProcessor:
             # RapidOCR 返回 (result_list, elapse_time)
             if isinstance(result, tuple) and len(result) == 2:
                 result_list, elapse = result
-                # elapse 可能是数字或列表
-                if isinstance(elapse, (list, tuple)):
-                    logger.debug(f"OCR耗时: {elapse}")
-                else:
-                    logger.debug(f"OCR耗时: {elapse:.2f}ms")
+                # elapse 可能是数字、列表或None
+                if elapse is not None:
+                    if isinstance(elapse, (list, tuple)):
+                        logger.debug(f"OCR耗时: {elapse}")
+                    else:
+                        logger.debug(f"OCR耗时: {elapse:.2f}ms")
             else:
                 result_list = result
             
