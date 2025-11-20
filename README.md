@@ -1,8 +1,19 @@
-
 # MEMEFinder — 表情包查找器
 
 基于 **OCR** 和 **情绪分析** 的桌面表情包管理与搜索工具。  
 支持批量扫描图片、MD5 去重、OCR 文本提取、情绪分析（可选），并提供 **Windows GUI** 与打包脚本，便于发布为可执行程序。
+
+---
+
+## 📚 完整文档
+
+本项目提供了详细的文档，请查看 **[📚 文档索引](文档索引.md)** 快速找到您需要的内容。
+
+**快速链接**：
+- 👤 [版本选择指南](版本选择指南.md) - 如何选择合适的版本
+- 🚀 [快速开始](docs/QUICK_START.md) - 首次使用教程
+- 💻 [发布教程](发布完整教程.md) - 开发者发布指南
+- 📋 [打包清单](打包检查清单.md) - 发布质量控制
 
 ---
 
@@ -12,14 +23,14 @@
 |------------|------|
 | `main.py` | 程序入口（启动 GUI） |
 | `src/` | 源代码目录（含 `core/`, `gui/`, `utils/`） |
-| `download_models.py` | 模型下载脚本 |
-| `build_exe.py` / `一键打包_无清理.bat` | 打包为可执行程序 |
+| `scripts/` | 维护、打包和发布脚本 |
+| `docs/` | 用户文档、使用指南 |
+| `test/` | 测试代码 |
+| `installer/` | 安装程序配置 |
 | `requirements.txt` | Python 依赖列表 |
-| `docs/` | 使用说明、打包与结构文档 |
-| `imgs/` | 示例图片 |
-| `models/` | 模型文件目录（运行或下载后填充） |
+| `models/` | 模型文件目录（运行时自动下载） |
 | `logs/` | 运行日志 |
-| Windows 辅助脚本 | `安装依赖.bat`、`启动程序.bat`、`创建安装程序.bat` 等 |
+| `LICENSE` | 开源协议 |
 
 ---
 
@@ -40,36 +51,67 @@
 
 ## 🚀 快速开始
 
-### 源码运行
+详细的快速入门指南请查看 [docs/QUICK_START.md](docs/QUICK_START.md)
 
-1. 安装依赖（在 PowerShell 中执行）：
+### 💾 下载可执行版本（推荐普通用户）
+
+MEMEFinder 提供3个预编译版本，无需安装Python即可使用：
+
+| 版本 | 适用人群 | 下载 | 大小 | 速度 |
+|------|---------|------|------|------|
+| **CPU通用版** | 所有用户（推荐） | [下载](releases) | ~150MB | 2-3秒/图 |
+| **GPU-CUDA11版** | GTX 10/16/20系列 | [下载](releases) | ~400MB | 0.5-1秒/图 |
+| **GPU-CUDA12版** | RTX 30/40系列 | [下载](releases) | ~450MB | 0.5-1秒/图 |
+
+#### 📋 如何选择版本？
+
+**方法1: 30秒快速选择**
+
+1. 打开命令提示符，运行: `nvidia-smi`
+2. 如果报错 → 下载 **CPU通用版**
+3. 如果显示 `CUDA Version: 11.x` → 下载 **GPU-CUDA11版**
+4. 如果显示 `CUDA Version: 12.x` → 下载 **GPU-CUDA12版**
+
+**方法2: 查看详细指南**
+
+查看 [版本选择指南.md](版本选择指南.md) 了解详细对比和推荐。
+
+**不确定？选CPU版本准没错！** ✅
+
+#### 📥 使用方法
+
+1. 下载对应版本的zip文件
+2. 解压到任意目录
+3. 运行 `MEMEFinder_xxx.exe`
+4. 浏览器会自动打开程序界面
+
+### 源码运行（开发者）
+
+1. **克隆项目**：
    ```bash
-   pip install -r requirements.txt
-    ````
-
-2. （可选）下载模型：
-
-   ```bash
-   python download_models.py
+   git clone <repository-url>
+   cd MEMEFinder
    ```
 
-   或运行发布包内的 **下载模型.bat**
+2. **安装依赖**：
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-3. 启动程序：
-
+3. **启动程序**：
    ```bash
    python main.py
    ```
 
-   或双击 **启动程序.bat**
+   模型文件会在首次使用时自动下载。
 
----
+### 快捷脚本（Windows）
 
-### 可执行包运行
+项目提供了便捷的批处理脚本，位于 `scripts/` 目录：
 
-1. 解压发布包 `dist/MEMEFinder/`
-2. **首次运行前** 建议执行 `下载模型.bat` 下载模型文件
-3. 双击 `MEMEFinder.exe` 启动程序
+- **`运行_CPU模式.bat`** - 使用 CPU 模式运行（适合无 GPU 或 GPU 驱动问题）
+- **`系统检查.bat`** - 检查系统环境和依赖
+- **`清理项目.bat`** - 清理临时文件和缓存
 
 ---
 
@@ -100,35 +142,58 @@
 
 ## 🧱 打包与发布
 
-* 使用内置脚本或批处理打包：
+开发者可以使用 `scripts/` 目录中的脚本进行项目打包：
 
-  ```bash
-    python build_exe.py
+### Windows 打包
 
-    或运行 **一键打包_无清理.bat**
-* 发布前可运行 **强制清理.bat** 清除旧构建
+```bash
+# 方式 1: 使用批处理脚本
+scripts\打包发布版.bat
 
-* 打包输出位于 `dist/MEMEFinder/`
+# 方式 2: 使用 Python 脚本
+python scripts/build_release.py
+```
 
-* 可使用 **Inno Setup** 生成安装程序（相关脚本在 `installer/` 目录中）
+### 打包准备
+
+在打包前，建议运行准备脚本：
+
+```bash
+python scripts/prepare_release.py
+```
+
+打包输出位于 `dist/MEMEFinder/`
+
+详细的打包说明请查看 [scripts/README.md](scripts/README.md)
 
 ---
 
 ## 🧰 常见问题（FAQ）
 
-| 问题         | 解决方案                                                      |
+| 问题 | 解决方案 |
 | ---------- | --------------------------------------------------------- |
-| 程序无法启动     | 确认 Python 版本 ≥ 3.8 且依赖已安装                                 |
-| OCR/情绪分析异常 | 确认模型已下载至 `models/`（可运行 `download_models.py` 或 `下载模型.bat`） |
-| 打包报错       | 运行清理脚本并确认 PyInstaller 与 Python 版本兼容                       |
+| 程序无法启动 | 确认 Python 版本 ≥ 3.8 且依赖已安装，运行 `scripts/系统检查.bat` |
+| GPU 相关问题 | 查看 [docs/GPU使用指南.md](docs/GPU使用指南.md) 或使用 CPU 模式 |
+| OCR/情绪分析异常 | 模型会自动下载，如有问题请检查网络连接 |
+| 打包报错 | 运行 `scripts/清理项目.bat` 后重试 |
+
+更多问题请查看 [docs/](docs/) 目录下的相关文档。
 
 ---
 
-## 📚 更多文档
+## 📚 文档导航
 
-* 使用与教程：[`docs/QUICKSTART.md`](docs/QUICKSTART.md)、[`docs/TUTORIAL.md`](docs/TUTORIAL.md)
-* 打包说明：[`docs/PACKAGING_SUMMARY.md`](docs/PACKAGING_SUMMARY.md)、[`docs/RELEASE_GUIDE.md`](docs/RELEASE_GUIDE.md)
-* 项目结构与概览：[`docs/STRUCTURE.md`](docs/STRUCTURE.md)、[`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md)
+### 用户文档
+- **[快速开始](docs/QUICK_START.md)** - 5分钟上手指南
+- **[用户指南](docs/USER_GUIDE.md)** - 完整使用教程
+- **[GPU 使用指南](docs/GPU使用指南.md)** - GPU 加速配置
+- **[GPU 快速指南](docs/GPU快速指南.md)** - GPU 快速入门
+- **[GPU 闪退修复](docs/GPU闪退修复指南.md)** - GPU 问题解决
+
+### 开发文档
+- **[优化指南](docs/OPTIMIZATION_GUIDE.md)** - 性能优化建议
+- **[脚本说明](scripts/README.md)** - 维护和打包脚本
+- **[历史文档](docs/archive/)** - 开发历史记录
 
 ---
 

@@ -9,50 +9,46 @@ import re
 import tempfile
 import gc
 import os
+import threading
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 
 import numpy as np
 from PIL import Image
-import cv2  # OpenCV - 必须在paddleocr之前导入，因为paddlex内部会使用
+import cv2
 
-# 注意：不在模块级别强制设置CPU模式
-# 设备选择将在 OCRProcessor 初始化时根据实际情况决定
-import sys
-
-# 只在打包环境且没有明确GPU需求时，才设置环境变量防止CUDA错误
-# 这样可以避免在没有GPU的环境中尝试加载CUDA库
-_is_frozen = getattr(sys, "frozen", False)
-
-import paddle
-# PaddleOCR
-from paddleocr import PaddleOCR
+# RapidOCR - 轻量级OCR引擎，易于打包
+from rapidocr_onnxruntime import RapidOCR
 
 # 导入日志和资源监控
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.logger import get_logger
 from utils.resource_monitor import get_resource_monitor
+from utils.gpu_detector import should_use_gpu, detect_gpu
 
 logger = get_logger()
 resource_monitor = get_resource_monitor()
 
 
-class OCRProcessor:
-    """OCR处理器 - 与 ocr_cli.py 完全兼容的实现（优化版）"""
 
-    def __init__(self, lang: str = 'ch', use_gpu: bool = False, det_side: int = 1536, use_senta: bool = True):
+
+class OCRProcessor:
+    """OCR处理器 - 使用 RapidOCR（轻量级，易于打包）"""
+
+    def __init__(self, lang: str = 'ch', use_gpu: Optional[bool] = None, det_side: int = 1536, use_senta: bool = True, model_dir: Optional[Path] = None):
         """
         初始化OCR处理器
 
         Args:
-            lang: 语言，默认'ch'（中文）
-            use_gpu: 是否使用GPU
+            lang: 语言，默认'ch'（中文）- RapidOCR会忽略此参数，因为它已内置多语言支持
+            use_gpu: 是否使用GPU，None表示自动检测
             det_side: 检测侧边长度，默认1536（可降低以减少内存）
             use_senta: 是否使用情绪分析模型，默认True（优先使用 SnowNLP，快速且准确）
+            model_dir: 模型存储目录，None表示使用默认路径（根目录的models文件夹）
         """
         logger.info("=" * 60)
-        logger.info("初始化 OCR 处理器...")
+        logger.info("初始化 OCR 处理器（RapidOCR）...")
         
         self.lang = lang
         self.det_side = det_side
@@ -61,33 +57,329 @@ class OCRProcessor:
         self._process_count = 0
         self._gc_interval = 10  # 每处理10张图片执行一次垃圾回收
 
-        # 处理计数器（用于定期清理内存）
-        self._process_count = 0
-        self._gc_interval = 10  # 每处理10张图片执行一次垃圾回收
+        # 设置模型存储路径
+        if model_dir is None:
+            # 默认使用项目根目录的models文件夹
+            project_root = Path(__file__).parent.parent.parent
+            model_dir = project_root / 'models'
+        
+        # 确保模型目录存在
+        model_dir = Path(model_dir)
+        model_dir.mkdir(parents=True, exist_ok=True)
+        
+        # RapidOCR模型存储路径设置
+        # RapidOCR会将模型下载到用户目录下的.rapidocr文件夹
+        # 我们需要通过环境变量或符号链接来重定向到我们的目录
+        # 设置RAPIDOCR_HOME环境变量（如果RapidOCR支持）
+        os.environ['RAPIDOCR_HOME'] = str(model_dir)
+        
+        # 也尝试设置可能的其他环境变量
+        os.environ['RAPIDOCR_MODEL_DIR'] = str(model_dir)
+        
+        logger.info(f"模型存储路径: {model_dir}")
+        logger.info(f"环境变量 RAPIDOCR_HOME: {os.environ.get('RAPIDOCR_HOME', '未设置')}")
 
-        # 设置设备（智能选择）
-        device_name, actually_using_gpu = self._setup_device(use_gpu)
-        if actually_using_gpu:
-            logger.info("✓ 使用 GPU 进行 OCR 识别（加速模式）")
+        # 检查是否通过环境变量强制使用 CPU 模式
+        force_cpu = os.environ.get('MEMEFINDER_FORCE_CPU', '').lower() in ('1', 'true', 'yes')
+        if force_cpu:
+            logger.info("检测到环境变量 MEMEFINDER_FORCE_CPU，强制使用 CPU 模式")
+            use_gpu = False
+
+        # 自动检测GPU（如果未指定）
+        if use_gpu is None:
+            has_gpu, gpu_info = detect_gpu()
+            use_gpu = should_use_gpu()
+            if has_gpu:
+                logger.info(f"✓ 检测到GPU: {gpu_info}")
+                logger.info(f"  将使用GPU加速模式")
+            else:
+                logger.info("✗ 未检测到GPU，将使用CPU模式")
+                if gpu_info and "不可用" in str(gpu_info):
+                    # GPU 硬件存在但初始化测试失败
+                    logger.warning(f"  原因: {gpu_info}")
+                    logger.info("  为了程序稳定性，已自动切换到CPU模式")
+                else:
+                    logger.info("  提示: 如需使用GPU，请确保已安装 onnxruntime-gpu")
         else:
-            logger.info(f"使用 {device_name.upper()} 进行 OCR 识别")
+            # 手动指定了GPU使用
+            if use_gpu:
+                has_gpu, gpu_info = detect_gpu()
+                if has_gpu:
+                    logger.info(f"✓ 手动启用GPU模式: {gpu_info}")
+                else:
+                    logger.warning("⚠ 手动启用了GPU，但系统可能不支持，将尝试使用GPU")
+            else:
+                logger.info("手动禁用GPU，使用CPU模式")
+        
+        # 初始化 RapidOCR
+        logger.info("正在初始化 RapidOCR...")
+        try:
+            # 确保模型目录存在
+            model_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 检查models目录下是否已有模型文件
+            existing_models = list(model_dir.rglob('*.onnx'))
+            if existing_models:
+                # 如果已有模型文件，尝试使用它们
+                model_names = {f.name.lower(): f for f in existing_models}
+                det_model = None
+                rec_model = None
+                cls_model = None
+                
+                # 查找检测模型
+                for name, path in model_names.items():
+                    if 'det' in name and 'infer' in name:
+                        det_model = path
+                        break
+                
+                # 查找识别模型
+                for name, path in model_names.items():
+                    if 'rec' in name and 'infer' in name:
+                        rec_model = path
+                        break
+                
+                # 查找分类模型（可选）
+                for name, path in model_names.items():
+                    if 'cls' in name and 'infer' in name:
+                        cls_model = path
+                        break
+                
+                if det_model and rec_model:
+                    logger.info(f"✓ 找到本地模型文件，使用本地模型")
+                    logger.info(f"  检测模型: {det_model.name}")
+                    logger.info(f"  识别模型: {rec_model.name}")
+                    if cls_model:
+                        logger.info(f"  方向分类: {cls_model.name}")
+                else:
+                    logger.info(f"模型文件不完整，RapidOCR将自动下载缺失的模型")
+                    det_model = None
+                    rec_model = None
+                    cls_model = None
+            else:
+                logger.info(f"模型文件不存在，RapidOCR将在首次使用时自动下载到: {model_dir}")
+                det_model = None
+                rec_model = None
+                cls_model = None
+            
+            # 构建RapidOCR初始化参数
+            # 注意：GPU模式可能导致初始化失败，需要做好异常处理
+            rapidocr_kwargs = {
+                'det_use_cuda': use_gpu,  # 检测模型是否使用CUDA
+                'cls_use_cuda': use_gpu,   # 方向分类是否使用CUDA  
+                'rec_use_cuda': use_gpu,   # 识别模型是否使用CUDA
+            }
+            
+            # 如果启用GPU，尝试验证CUDA是否可用
+            if use_gpu:
+                try:
+                    import onnxruntime as ort
+                    available_providers = ort.get_available_providers()
+                    if 'CUDAExecutionProvider' not in available_providers:
+                        logger.warning("⚠ CUDA不可用，将自动切换到CPU模式")
+                        logger.warning(f"  可用提供者: {available_providers}")
+                        use_gpu = False
+                        rapidocr_kwargs['det_use_cuda'] = False
+                        rapidocr_kwargs['cls_use_cuda'] = False
+                        rapidocr_kwargs['rec_use_cuda'] = False
+                except Exception as e:
+                    logger.warning(f"⚠ 检查CUDA可用性失败: {e}")
+                    logger.warning("  将尝试使用GPU模式，如失败将回退到CPU")
+            
+            # 设置模型文件的标准路径（如果还没有找到本地模型）
+            if not det_model:
+                det_model = model_dir / 'ch_PP-OCRv4_det_infer.onnx'
+            if not rec_model:
+                rec_model = model_dir / 'ch_PP-OCRv4_rec_infer.onnx'
+            if not cls_model:
+                # 注意文件名可能有两种格式
+                cls_model_v2 = model_dir / 'ch_ppocr_mobile_v2.0_cls_infer.onnx'
+                cls_model_old = model_dir / 'ch_ppocr_mobile_v2_cls_infer.onnx'
+                if cls_model_v2.exists():
+                    cls_model = cls_model_v2
+                elif cls_model_old.exists():
+                    cls_model = cls_model_old
+                else:
+                    cls_model = cls_model_v2  # 默认使用v2.0版本
+            
+            # 检查模型文件是否存在，如果不存在则给出明确提示
+            missing_models = []
+            if not det_model.exists():
+                missing_models.append(f"检测模型: {det_model.name}")
+            if not rec_model.exists():
+                missing_models.append(f"识别模型: {rec_model.name}")
+            if not cls_model.exists():
+                missing_models.append(f"方向分类: {cls_model.name}")
+            
+            if missing_models:
+                logger.warning("=" * 60)
+                logger.warning("缺少以下模型文件，请手动下载到 models 目录:")
+                for model in missing_models:
+                    logger.warning(f"  - {model}")
+                logger.warning("")
+                logger.warning("下载方法1 - 从RapidOCR包复制:")
+                logger.warning("  运行: python copy_models.py")
+                logger.warning("")
+                logger.warning("下载方法2 - 从GitHub下载:")
+                logger.warning("  https://github.com/RapidAI/RapidOCR/tree/main/python/rapidocr_onnxruntime/models")
+                logger.warning("=" * 60)
+                raise FileNotFoundError(f"模型文件缺失: {', '.join([m.split(':')[1].strip() for m in missing_models])}")
+            
+            # 直接传递模型文件的绝对路径给RapidOCR
+            # 注意：这里不使用params参数，而是直接传递路径参数
+            rapidocr_kwargs['det_model_path'] = str(det_model)
+            rapidocr_kwargs['rec_model_path'] = str(rec_model)
+            rapidocr_kwargs['cls_model_path'] = str(cls_model)
+            
+            logger.info(f"模型路径配置:")
+            logger.info(f"  检测模型: {det_model}")
+            logger.info(f"  识别模型: {rec_model}")
+            logger.info(f"  方向分类: {cls_model}")
+            
+            # 尝试初始化 RapidOCR，如果GPU模式失败则自动回退到CPU
+            ocr_initialized = False
+            last_error = None
+            
+            try:
+                logger.info(f"尝试初始化 RapidOCR ({'GPU' if use_gpu else 'CPU'} 模式)...")
+                
+                # 直接初始化（移除守护线程机制以兼容打包环境）
+                # 注意：在打包后的环境中，守护线程可能导致GPU初始化失败
+                try:
+                    self.ocr = RapidOCR(**rapidocr_kwargs)
+                    
+                    if self.ocr is None:
+                        raise Exception("RapidOCR 初始化返回 None")
+                    
+                    # GPU模式下额外验证
+                    if use_gpu:
+                        logger.info("GPU 模式初始化成功，验证中...")
+                        # 不再使用超时机制，直接初始化可以避免线程问题
+                
+                except Exception as init_error:
+                    # 如果是GPU模式失败，记录错误并准备降级
+                    if use_gpu:
+                        logger.error(f"✗ RapidOCR GPU 模式初始化失败: {init_error}")
+                        raise init_error  # 抛出异常，让外层捕获并降级到CPU
+                    else:
+                        # CPU模式失败就是真的失败了
+                        raise
+                
+                # 尝试进行一个简单的测试以确保OCR真的可用
+                # 这可以捕获一些延迟的初始化错误
+                ocr_initialized = True
+                logger.info("✓ RapidOCR 对象创建成功")
+                
+            except Exception as e:
+                last_error = e
+                error_msg = str(e)
+                logger.error(f"✗ RapidOCR 初始化失败: {error_msg}")
+                
+                # 分析错误原因并给出建议
+                if use_gpu:
+                    logger.warning("=" * 60)
+                    logger.warning("⚠ GPU模式初始化失败")
+                    logger.warning("=" * 60)
+                    
+                    # 分析具体错误
+                    if "Timeout" in error_msg or "超时" in error_msg:
+                        logger.warning("错误类型: 初始化超时")
+                        logger.warning("可能原因:")
+                        logger.warning("  1. 打包后的程序缺少CUDA相关的DLL文件")
+                        logger.warning("  2. GPU驱动存在问题或版本不兼容")
+                        logger.warning("  3. onnxruntime-gpu加载CUDA库时卡住")
+                        logger.warning("")
+                        logger.warning("说明:")
+                        logger.warning("  这是打包程序在某些GPU环境下的已知问题")
+                        logger.warning("  程序将自动切换到CPU模式，不影响使用")
+                    elif "CUDA" in error_msg or "cuda" in error_msg:
+                        logger.warning("错误类型: CUDA相关")
+                        logger.warning("可能原因:")
+                        logger.warning("  1. CUDA版本与onnxruntime-gpu不匹配")
+                        logger.warning("  2. 缺少cuDNN库")
+                        logger.warning("  3. CUDA驱动损坏")
+                        logger.warning("")
+                        logger.warning("修复建议:")
+                        logger.warning("  1. 检查CUDA版本: nvidia-smi")
+                        logger.warning("  2. 重新安装onnxruntime-gpu:")
+                        logger.warning("     pip uninstall onnxruntime onnxruntime-gpu")
+                        logger.warning("     pip install onnxruntime-gpu")
+                        logger.warning("  3. 或者使用CPU模式（稳定可靠）")
+                    elif "DLL" in error_msg or "load" in error_msg:
+                        logger.warning("错误类型: 库文件加载失败")
+                        logger.warning("可能原因:")
+                        logger.warning("  1. 缺少必要的DLL文件")
+                        logger.warning("  2. Visual C++ 运行库未安装")
+                        logger.warning("")
+                        logger.warning("修复建议:")
+                        logger.warning("  1. 安装 Visual C++ Redistributable")
+                        logger.warning("  2. 使用CPU模式")
+                    else:
+                        logger.warning("错误类型: 未知")
+                        logger.warning("建议使用CPU模式以保证程序稳定运行")
+                    
+                    logger.warning("=" * 60)
+                    logger.warning("正在自动切换到CPU模式...")
+                    logger.warning("=" * 60)
+                    
+                    try:
+                        # 切换到CPU模式
+                        rapidocr_kwargs['det_use_cuda'] = False
+                        rapidocr_kwargs['cls_use_cuda'] = False
+                        rapidocr_kwargs['rec_use_cuda'] = False
+                        use_gpu = False
+                        
+                        logger.info("重新尝试初始化 RapidOCR (CPU 模式)...")
+                        self.ocr = RapidOCR(**rapidocr_kwargs)
+                        
+                        if self.ocr is None:
+                            raise Exception("RapidOCR 初始化返回 None")
+                        
+                        ocr_initialized = True
+                        logger.info("✓ CPU模式初始化成功")
+                        
+                    except Exception as cpu_error:
+                        logger.error(f"✗ CPU模式也初始化失败: {cpu_error}")
+                        raise Exception(f"RapidOCR 初始化完全失败 - GPU错误: {last_error}, CPU错误: {cpu_error}")
+                else:
+                    # 如果本来就是CPU模式，直接抛出错误
+                    raise
+            
+            if not ocr_initialized or self.ocr is None:
+                raise Exception("RapidOCR 初始化失败")
+            
+            # 验证实际使用的设备
+            actual_device = "未知"
+            try:
+                # 尝试从OCR对象获取设备信息
+                if hasattr(self.ocr, 'det_model') and hasattr(self.ocr.det_model, 'session'):
+                    providers = self.ocr.det_model.session.get_providers()
+                    if 'CUDAExecutionProvider' in providers:
+                        actual_device = "GPU (CUDA)"
+                    elif 'DmlExecutionProvider' in providers:
+                        actual_device = "GPU (DirectML)"
+                    else:
+                        actual_device = "CPU"
+            except:
+                # 如果无法获取，使用我们设置的use_gpu值
+                actual_device = "GPU" if use_gpu else "CPU"
+            
+            device_type = "GPU" if use_gpu else "CPU"
+            logger.info(f"✓ RapidOCR 初始化成功")
+            logger.info(f"  配置模式: {device_type}")
+            logger.info(f"  实际设备: {actual_device}")
+            logger.info("RapidOCR 优势：轻量级、易打包、无复杂依赖")
+            
+            # 检查模型文件位置（初始化后再次检查）
+            self._check_model_location(model_dir)
+            
+        except Exception as e:
+            error_msg = f"RapidOCR 初始化失败: {e}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
 
-        # 初始化OCR（与 ocr_cli.py 完全一致的配置）
-        # 注意：新版本 PaddleOCR 不再接受 use_gpu 参数
-        # 设备选择已通过 paddle.set_device() 和环境变量控制
-        logger.info(f"正在初始化 PaddleOCR (lang={lang}, det_side={det_side})...")
-        self.ocr = PaddleOCR(
-            lang=lang,
-            use_textline_orientation=True,
-            use_doc_orientation_classify=True,
-            use_doc_unwarping=True,
-            text_det_limit_side_len=det_side,
-            text_det_limit_type="max",
-            text_det_box_thresh=0.30,
-            text_det_unclip_ratio=2.30,
-        )
-        logger.info("PaddleOCR 初始化完成")
-
+        # 保存模型目录路径供后续使用
+        self.model_dir = model_dir
+        
         # 初始化 Senta 情绪分析（可选）
         self._senta = None
         self._use_senta = False
@@ -98,115 +390,36 @@ class OCRProcessor:
         resource_monitor.log_resource_status()
         logger.info("OCR 处理器初始化完成")
         logger.info("=" * 60)
-
-    @staticmethod
-    def _cuda_compiled() -> bool:
-        """检查Paddle是否编译了CUDA支持"""
-        try:
-            # 在新版 Paddle 中优先使用 paddle.is_compiled_with_cuda
-            if hasattr(paddle, 'is_compiled_with_cuda'):
-                return bool(paddle.is_compiled_with_cuda())
-            # 兼容性：如果没有该函数，则认为不可用
-            return False
-        except Exception:
-            return False
     
-    @staticmethod
-    def _gpu_available() -> bool:
-        """检查GPU是否真的可用（运行时检测）"""
-        # 保存原始环境变量
-        original_cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', None)
-        original_flags_gpus = os.environ.get('FLAGS_selected_gpus', None)
+    def _check_model_location(self, target_dir: Path):
+        """
+        检查模型文件位置
         
+        Args:
+            target_dir: 目标模型目录
+        """
         try:
-            # 检查是否有CUDA设备可用
-            if hasattr(paddle, 'is_compiled_with_cuda'):
-                if not paddle.is_compiled_with_cuda():
-                    return False
-            
-            # 尝试设置GPU并创建tensor来验证
-            try:
-                # 临时清除可能存在的禁用设置
-                if 'CUDA_VISIBLE_DEVICES' in os.environ and os.environ['CUDA_VISIBLE_DEVICES'] == '':
-                    del os.environ['CUDA_VISIBLE_DEVICES']
-                if 'FLAGS_selected_gpus' in os.environ and os.environ['FLAGS_selected_gpus'] == '':
-                    del os.environ['FLAGS_selected_gpus']
+            # 检查目标目录是否有模型文件
+            target_onnx = list(target_dir.rglob('*.onnx'))
+            if target_onnx:
+                total_size = sum(f.stat().st_size for f in target_onnx) / (1024 * 1024)
+                logger.info(f"✓ 模型文件已在目标目录: {target_dir}")
+                logger.info(f"  找到 {len(target_onnx)} 个模型文件，总大小: {total_size:.2f} MB")
                 
-                # 尝试设置GPU
-                paddle.set_device('gpu')
-                # 尝试创建一个简单的tensor来验证GPU是否可用
-                test_tensor = paddle.zeros([1])
-                del test_tensor
+                # 列出主要模型文件
+                main_models = ['det', 'rec', 'cls']
+                for model_type in main_models:
+                    model_files = [f for f in target_onnx if model_type.lower() in f.name.lower()]
+                    if model_files:
+                        logger.info(f"    - {model_type.upper()}: {model_files[0].name}")
+                return
+            
+            # 如果目标目录没有模型，检查是否在下载中
+            logger.info(f"模型文件将在首次使用时自动下载到: {target_dir}")
+            logger.info("  下载完成后，模型将保存在此目录，无需再次下载")
                 
-                return True
-            except Exception:
-                return False
-        except Exception:
-            return False
-        finally:
-            # 恢复环境变量
-            if original_cuda_visible is not None:
-                os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_visible
-            elif 'CUDA_VISIBLE_DEVICES' not in os.environ and original_cuda_visible is None:
-                # 如果原来不存在，且现在被删除了，不需要恢复
-                pass
-            
-            if original_flags_gpus is not None:
-                os.environ['FLAGS_selected_gpus'] = original_flags_gpus
-            elif 'FLAGS_selected_gpus' not in os.environ and original_flags_gpus is None:
-                # 如果原来不存在，且现在被删除了，不需要恢复
-                pass
-    
-    @staticmethod
-    def _setup_device(use_gpu: bool) -> tuple[str, bool]:
-        """
-        设置计算设备
-        
-        Returns:
-            (device_name, actually_using_gpu): 实际使用的设备名称和是否真的在使用GPU
-        """
-        is_frozen = getattr(sys, "frozen", False)
-        actually_using_gpu = False
-        
-        if use_gpu:
-            # 用户想要使用GPU
-            if OCRProcessor._cuda_compiled():
-                # Paddle编译了CUDA支持
-                if OCRProcessor._gpu_available():
-                    # GPU真的可用
-                    try:
-                        # 在打包环境中，确保不设置禁用GPU的环境变量
-                        if is_frozen:
-                            # 清除可能存在的CPU强制设置
-                            if 'CUDA_VISIBLE_DEVICES' in os.environ and os.environ['CUDA_VISIBLE_DEVICES'] == '':
-                                del os.environ['CUDA_VISIBLE_DEVICES']
-                            if 'FLAGS_selected_gpus' in os.environ and os.environ['FLAGS_selected_gpus'] == '':
-                                del os.environ['FLAGS_selected_gpus']
-                        
-                        paddle.set_device('gpu')
-                        actually_using_gpu = True
-                        return ('gpu', True)
-                    except Exception as e:
-                        logger.warning(f"GPU设置失败 ({e})，回退到CPU")
-                        paddle.set_device('cpu')
-                        return ('cpu', False)
-                else:
-                    logger.warning("GPU不可用（运行时检测失败），使用CPU")
-                    paddle.set_device('cpu')
-                    return ('cpu', False)
-            else:
-                logger.warning("Paddle未编译CUDA支持，使用CPU")
-                paddle.set_device('cpu')
-                return ('cpu', False)
-        else:
-            # 用户不想使用GPU，或者打包环境中默认使用CPU
-            # 在打包环境中，设置环境变量防止尝试加载CUDA库
-            if is_frozen:
-                os.environ['CUDA_VISIBLE_DEVICES'] = ''
-                os.environ['FLAGS_selected_gpus'] = ''
-            
-            paddle.set_device('cpu')
-            return ('cpu', False)
+        except Exception as e:
+            logger.warning(f"检查模型位置时出错: {e}")
 
     def process_image(self, image_path: Path, pad_ratio: float = 0.10) -> Dict[str, Any]:
         """
@@ -360,188 +573,64 @@ class OCRProcessor:
 
     def _ocr_single(self, img_path: Path) -> Dict[str, Any]:
         """
-        单张图片OCR识别（与 ocr_cli.py 完全一致）
+        单张图片OCR识别（使用 RapidOCR）
 
         Returns:
             {"image": "...", "items": [{"box":[[x,y]x4], "text":"...", "score":0.xx}, ...]}
         """
-        res = None
-        error_msg = None
-        
         try:
-            # 尝试使用 predict 方法
-            try:
-                res = self.ocr.predict(str(img_path))
-                logger.debug(f"OCR predict方法成功，结果类型: {type(res)}")
-            except TypeError as e:
-                logger.debug(f"OCR predict需要列表参数，尝试转换: {e}")
-                tmp = self.ocr.predict([str(img_path)])
-                res = tmp[0] if isinstance(tmp, (list, tuple)) and len(tmp) == 1 else tmp
-            except Exception as e:
-                error_msg = f"predict方法失败: {e}"
-                logger.debug(error_msg)
-                res = None
-        except Exception as e:
-            error_msg = f"OCR predict异常: {e}"
-            logger.debug(error_msg)
-            res = None
-
-        if not res:
-            try:
-                logger.debug("尝试使用ocr方法...")
-                res = self.ocr.ocr(str(img_path))
-                logger.debug(f"OCR ocr方法成功，结果类型: {type(res)}")
-            except Exception as e:
-                error_msg = f"ocr方法失败: {e}"
-                logger.warning(error_msg)
-                res = None
-
-        if not res:
-            logger.warning(f"OCR识别失败，未返回结果: {img_path.name}")
-            if error_msg:
-                logger.debug(f"错误详情: {error_msg}")
+            # RapidOCR 返回格式: 
+            # - 成功时: (result_list, elapse) 其中 result_list = [[box, text, score], ...]
+            # - 失败时: (None, elapse) 或 ([], elapse)
+            result = self.ocr(str(img_path))
+            
+            if result is None:
+                logger.warning(f"OCR识别失败，未返回结果: {img_path.name}")
+                return {"image": str(img_path), "items": []}
+            
+            # RapidOCR 返回 (result_list, elapse_time)
+            if isinstance(result, tuple) and len(result) == 2:
+                result_list, elapse = result
+                # elapse 可能是数字、列表或None
+                if elapse is not None:
+                    if isinstance(elapse, (list, tuple)):
+                        logger.debug(f"OCR耗时: {elapse}")
+                    else:
+                        logger.debug(f"OCR耗时: {elapse:.2f}ms")
+            else:
+                result_list = result
+            
+            # 解析 RapidOCR 结果
             items = []
+            
+            if result_list:
+                for item in result_list:
+                    # item 格式: [box, text, score]
+                    # box: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+                    if len(item) >= 2:  # 至少有 box 和 text
+                        box = item[0]
+                        text = item[1]
+                        score = item[2] if len(item) > 2 else 1.0
+                        
+                        items.append({
+                            "box": box.tolist() if hasattr(box, 'tolist') else box,
+                            "text": str(text),
+                            "score": float(score)
+                        })
+                
+                logger.debug(f"OCR识别完成，识别到 {len(items)} 个文本区域")
+                if len(items) > 0:
+                    logger.debug(f"第一个文本区域: {items[0].get('text', '')[:50]}")
+            
             return {"image": str(img_path), "items": items}
-
-        # 解析结果（使用 ocr_cli.py 的解析逻辑）
-        try:
-            items = self._parse_ocr_result(res, img_path)
-            logger.debug(f"OCR解析完成，识别到 {len(items)} 个文本区域")
-            if len(items) > 0:
-                logger.debug(f"第一个文本区域: {items[0].get('text', '')[:50]}")
+            
         except Exception as e:
-            logger.error(f"OCR结果解析失败: {e}")
-            logger.debug(f"原始结果类型: {type(res)}, 内容预览: {str(res)[:200]}")
-            items = []
+            logger.error(f"OCR识别异常: {e}")
+            import traceback
+            logger.debug(f"错误详情:\n{traceback.format_exc()}")
+            return {"image": str(img_path), "items": []}
 
-        return {"image": str(img_path), "items": items}
 
-    def _parse_ocr_result(self, res, img_path: Path) -> List[Dict[str, Any]]:
-        """
-        解析OCR结果（与 ocr_cli.py 完全一致的解析逻辑）
-        """
-        items: List[Dict[str, Any]] = []
-
-        def _tolist(x):
-            try:
-                return x.tolist() if hasattr(x, "tolist") else x
-            except Exception:
-                return x
-
-        def _find_inner_res(d):
-            # 递归查找包含 rec_texts + (rec_polys|dt_polys) 的层
-            if isinstance(d, dict):
-                if "res" in d and isinstance(d["res"], dict):
-                    v = d["res"]
-                    ks = v.keys()
-                    if ("rec_texts" in ks) and (("rec_polys" in ks) or ("dt_polys" in ks)):
-                        return v
-                ks = d.keys()
-                if ("rec_texts" in ks) and (("rec_polys" in ks) or ("dt_polys" in ks)):
-                    return d
-                for v in d.values():
-                    inner = _find_inner_res(v)
-                    if inner is not None:
-                        return inner
-            elif isinstance(d, (list, tuple)):
-                for v in d:
-                    inner = _find_inner_res(v)
-                    if inner is not None:
-                        return inner
-            return None
-
-        inner = _find_inner_res(res)
-        if inner is not None:
-            texts = list(inner.get("rec_texts") or [])
-            scores = list(inner.get("rec_scores") or [])
-            polys = _tolist(inner.get("rec_polys") or inner.get("dt_polys"))
-            n = len(texts)
-            for i in range(n):
-                text = str(texts[i])
-                score = float(scores[i]) if i < len(scores) else 0.0
-                if polys is not None and i < len(polys):
-                    box = _tolist(polys[i])
-                    if isinstance(box, (list, tuple)) and len(box) == 4 and all(
-                        isinstance(p, (list, tuple)) and len(p) == 2 for p in box
-                    ):
-                        items.append({"box": box, "text": text, "score": score})
-            return items
-
-        # 旧风格解析
-        def _num(x):
-            return isinstance(x, (int, float, np.integer, np.floating))
-
-        def _pt(p):
-            return isinstance(p, (list, tuple, np.ndarray)) and len(p) == 2 and _num(p[0]) and _num(p[1])
-
-        def _box(b):
-            if hasattr(b, "tolist"):
-                try:
-                    b = b.tolist()
-                except Exception:
-                    return None
-            return b if (isinstance(b, (list, tuple)) and len(b) == 4 and all(_pt(p) for p in b)) else None
-
-        def _ts(v):
-            return (isinstance(v, (list, tuple)) and len(v) >= 2 and isinstance(v[0], str) and _num(v[1]))
-
-        if isinstance(res, (list, tuple)) and len(res) > 0:
-            first = res[0]
-            if isinstance(first, (list, tuple)) and first and isinstance(first[0], (list, tuple)):
-                for line in first:
-                    if not (isinstance(line, (list, tuple)) and len(line) >= 2):
-                        continue
-                    b = _box(line[0])
-                    ts = line[1]
-                    if b is not None and _ts(ts):
-                        items.append({"box": b, "text": ts[0], "score": float(ts[1])})
-                if items:
-                    return items
-
-            ok = False
-            for line in res:
-                if not (isinstance(line, (list, tuple)) and len(line) >= 2):
-                    continue
-                b = _box(line[0])
-                ts = line[1]
-                if b is not None and _ts(ts):
-                    items.append({"box": b, "text": ts[0], "score": float(ts[1])})
-                    ok = True
-            if ok:
-                return items
-
-        if (
-            isinstance(res, (list, tuple)) and len(res) == 2
-            and isinstance(res[0], (list, tuple)) and isinstance(res[1], (list, tuple))
-        ):
-            det_boxes, recs = res[0], res[1]
-            n = min(len(det_boxes), len(recs))
-            for i in range(n):
-                b = _box(det_boxes[i])
-                ts = recs[i]
-                if b is not None and _ts(ts):
-                    items.append({"box": b, "text": ts[0], "score": float(ts[1])})
-            if items:
-                return items
-
-        seq = res if isinstance(res, (list, tuple)) else [res]
-        took = False
-        for d in seq:
-            if not isinstance(d, dict):
-                continue
-            b = _box(d.get("box") or d.get("bbox") or d.get("points") or d.get("poly") or d.get("det"))
-            ts = d.get("rec")
-            text = d.get("text") or d.get("transcription") or d.get("label")
-            score = d.get("score") or d.get("confidence") or d.get("prob")
-            if ts and _ts(ts):
-                text, score = ts[0], ts[1]
-            if b is not None and isinstance(text, str):
-                items.append({"box": b, "text": text, "score": float(score or 0.0)})
-                took = True
-        if took:
-            return items
-
-        return []
 
     def _extract_text(self, ocr_result: List[Dict[str, Any]]) -> str:
         """从OCR结果中提取文本"""
