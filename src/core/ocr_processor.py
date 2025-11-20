@@ -10,6 +10,7 @@ import tempfile
 import gc
 import os
 import threading
+import traceback
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 
@@ -505,15 +506,14 @@ class OCRProcessor:
         Returns:
             {"image": "...", "items": [{"box":[[x,y]x4], "text":"...", "score":0.xx}, ...]}
         """
-        td_ctx = None
         try:
             # 创建外扩图片
-            td_ctx, feed_path, (px, py), (orig_w, orig_h) = self._make_padded_tmp(
+            feed_img, (px, py), (orig_w, orig_h) = self._make_padded_tmp(
                 img_path, pad_ratio
             )
 
             # OCR识别
-            result = self._ocr_single(feed_path)
+            result = self._ocr_single(feed_img)
             
             # 确保result是字典
             if not isinstance(result, dict):
@@ -527,9 +527,9 @@ class OCRProcessor:
 
             return {"image": str(img_path), "items": items}
 
-        finally:
-            if td_ctx is not None:
-                td_ctx.cleanup()
+        except Exception as e:
+            logger.error(f"OCR识别异常: {e}")
+            return {"image": str(img_path), "items": []}
 
     def _make_padded_tmp(self, img_path: Path, pad_ratio: float, pad_color=(0, 0, 0)) -> Tuple:
         """创建外扩的临时图片（与 ocr_cli.py 一致，优化内存使用）"""
@@ -542,21 +542,17 @@ class OCRProcessor:
             w, h = img.size
 
             if pad_ratio <= 0:
-                return None, img_path, (0, 0), (w, h)
+                return img, (0, 0), (w, h)
 
             px = max(1, int(round(w * pad_ratio)))
             py = max(1, int(round(h * pad_ratio)))
             canvas = Image.new("RGB", (w + 2 * px, h + 2 * py), pad_color)
             canvas.paste(img, (px, py))
 
-            td = tempfile.TemporaryDirectory()
-            outp = Path(td.name) / f"{img_path.stem}.padded.png"
-            canvas.save(outp)
-            
-            # 显式释放canvas
-            del canvas
+            # 显式释放img
+            del img
 
-        return td, outp, (px, py), (w, h)
+        return canvas, (px, py), (w, h)
 
     def _shift_items_to_original(self, items: List[Dict[str, Any]], dx: int, dy: int, orig_wh=None) -> List[Dict[str, Any]]:
         """将坐标回退到原图（与 ocr_cli.py 一致）"""
@@ -571,9 +567,12 @@ class OCRProcessor:
 
         return shifted
 
-    def _ocr_single(self, img_path: Path) -> Dict[str, Any]:
+    def _ocr_single(self, img_input) -> Dict[str, Any]:
         """
         单张图片OCR识别（使用 RapidOCR）
+
+        Args:
+            img_input: PIL Image 对象或图片路径
 
         Returns:
             {"image": "...", "items": [{"box":[[x,y]x4], "text":"...", "score":0.xx}, ...]}
@@ -582,11 +581,11 @@ class OCRProcessor:
             # RapidOCR 返回格式: 
             # - 成功时: (result_list, elapse) 其中 result_list = [[box, text, score], ...]
             # - 失败时: (None, elapse) 或 ([], elapse)
-            result = self.ocr(str(img_path))
+            result = self.ocr(img_input)
             
             if result is None:
-                logger.warning(f"OCR识别失败，未返回结果: {img_path.name}")
-                return {"image": str(img_path), "items": []}
+                logger.warning(f"OCR识别失败，未返回结果")
+                return {"image": "", "items": []}
             
             # RapidOCR 返回 (result_list, elapse_time)
             if isinstance(result, tuple) and len(result) == 2:
@@ -622,13 +621,12 @@ class OCRProcessor:
                 if len(items) > 0:
                     logger.debug(f"第一个文本区域: {items[0].get('text', '')[:50]}")
             
-            return {"image": str(img_path), "items": items}
+            return {"image": "", "items": items}
             
         except Exception as e:
             logger.error(f"OCR识别异常: {e}")
-            import traceback
             logger.debug(f"错误详情:\n{traceback.format_exc()}")
-            return {"image": str(img_path), "items": []}
+            return {"image": "", "items": []}
 
 
 
