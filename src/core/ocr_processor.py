@@ -12,7 +12,7 @@ import os
 import threading
 import traceback
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Union
 
 import numpy as np
 from PIL import Image
@@ -68,17 +68,7 @@ class OCRProcessor:
         model_dir = Path(model_dir)
         model_dir.mkdir(parents=True, exist_ok=True)
         
-        # RapidOCR模型存储路径设置
-        # RapidOCR会将模型下载到用户目录下的.rapidocr文件夹
-        # 我们需要通过环境变量或符号链接来重定向到我们的目录
-        # 设置RAPIDOCR_HOME环境变量（如果RapidOCR支持）
-        os.environ['RAPIDOCR_HOME'] = str(model_dir)
-        
-        # 也尝试设置可能的其他环境变量
-        os.environ['RAPIDOCR_MODEL_DIR'] = str(model_dir)
-        
         logger.info(f"模型存储路径: {model_dir}")
-        logger.info(f"环境变量 RAPIDOCR_HOME: {os.environ.get('RAPIDOCR_HOME', '未设置')}")
 
         # 检查是否通过环境变量强制使用 CPU 模式
         force_cpu = os.environ.get('MEMEFINDER_FORCE_CPU', '').lower() in ('1', 'true', 'yes')
@@ -164,7 +154,7 @@ class OCRProcessor:
             
             # 构建RapidOCR初始化参数
             # 注意：GPU模式可能导致初始化失败，需要做好异常处理
-            rapidocr_kwargs = {
+            rapidocr_kwargs: Dict[str, Any] = {
                 'det_use_cuda': use_gpu,  # 检测模型是否使用CUDA
                 'cls_use_cuda': use_gpu,   # 方向分类是否使用CUDA  
                 'rec_use_cuda': use_gpu,   # 识别模型是否使用CUDA
@@ -255,7 +245,7 @@ class OCRProcessor:
                     # GPU模式下验证是否真的使用了GPU
                     if use_gpu:
                         if hasattr(self.ocr, 'text_det') and hasattr(self.ocr.text_det, 'session'):
-                            providers = self.ocr.text_det.session.get_providers()
+                            providers = self.ocr.text_det.session.get_providers()  # type: ignore
                             if 'CUDAExecutionProvider' in providers:
                                 actual_gpu_available = True
                             else:
@@ -322,7 +312,7 @@ class OCRProcessor:
             try:
                 # 尝试从OCR对象获取设备信息
                 if hasattr(self.ocr, 'text_det') and hasattr(self.ocr.text_det, 'session'):
-                    providers = self.ocr.text_det.session.get_providers()
+                    providers = self.ocr.text_det.session.get_providers()  # type: ignore
                     if 'CUDAExecutionProvider' in providers:
                         actual_device = "GPU (CUDA)"
                         actual_gpu_available = True
@@ -332,8 +322,8 @@ class OCRProcessor:
                     else:
                         actual_device = "CPU"
                         actual_gpu_available = False
-                elif hasattr(self.ocr, 'det_model') and hasattr(self.ocr.det_model, 'session'):
-                    providers = self.ocr.det_model.session.get_providers()
+                elif hasattr(self.ocr, 'det_model') and hasattr(self.ocr.det_model, 'session'):  # type: ignore
+                    providers = self.ocr.det_model.session.get_providers()  # type: ignore
                     if 'CUDAExecutionProvider' in providers:
                         actual_device = "GPU (CUDA)"
                         actual_gpu_available = True
@@ -584,7 +574,7 @@ class OCRProcessor:
                         score = item[2] if len(item) > 2 else 1.0
                         
                         items.append({
-                            "box": box.tolist() if hasattr(box, 'tolist') else box,
+                            "box": box.tolist() if hasattr(box, 'tolist') else box,  # type: ignore
                             "text": str(text),
                             "score": float(score)
                         })
@@ -683,7 +673,7 @@ class OCRProcessor:
 
         # 方案2：尝试使用 TextBlob（适合英文）
         try:
-            from textblob import TextBlob
+            from textblob import TextBlob  # type: ignore
             logger.info("正在初始化 TextBlob 情绪分析模型...")
             
             # 测试模型
@@ -705,7 +695,7 @@ class OCRProcessor:
         self._senta = None
         self._use_senta = False
 
-    def _senta_analyze(self, text: str) -> Tuple[str, float, float]:
+    def _senta_analyze(self, text: str) -> Optional[Tuple[str, float, float]]:
         """
         使用深度学习模型进行情绪分析
 
@@ -744,7 +734,7 @@ class OCRProcessor:
 
             # 方案2：使用 TextBlob
             elif self._senta == 'textblob':
-                from textblob import TextBlob
+                from textblob import TextBlob  # type: ignore
                 blob = TextBlob(text)
                 polarity = blob.sentiment.polarity  # 返回 -1 到 1 之间的分数
                 

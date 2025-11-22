@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 import threading
 import os
+from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
 
@@ -29,7 +30,7 @@ class ProcessTab:
         self.stats_callback = stats_callback  # 用于更新统计信息的回调函数
         
         # OCR处理器（延迟初始化）
-        self.ocr_processor = None
+        self.ocr_processor: Optional[OCRProcessor] = None
         self._ocr_initialized = False
         
         # 处理状态
@@ -250,6 +251,7 @@ class ProcessTab:
                 }
             
             # OCR识别和情绪分析
+            assert self.ocr_processor is not None, "OCR处理器未初始化"
             result = self.ocr_processor.process_image(Path(img_path))
             
             # 更新数据库
@@ -402,6 +404,7 @@ class ProcessTab:
                     continue
                 
                 # OCR识别和情绪分析
+                assert self.ocr_processor is not None, "OCR处理器未初始化"
                 result = self.ocr_processor.process_image(Path(img_path))
                 
                 # 更新数据库
