@@ -7,6 +7,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
+import sys
 
 from .source_tab import SourceTab
 from .process_tab import ProcessTab
@@ -19,11 +20,9 @@ class MemeFinderGUI:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("表情包查找器 - MEMEFinder")
-        self.root.geometry("1000x700")
         
-        # 设置窗口图标
-        self._set_window_icon()
+        self.root.title("MEMEFinder")
+        self.root.geometry("1000x700")
         
         # 数据库
         self.db = ImageDatabase()
@@ -40,6 +39,9 @@ class MemeFinderGUI:
             self.check_resume()
         except Exception:
             pass
+        
+        # 在窗口完全创建后设置图标
+        self.root.after(50, self._set_window_icon)
     
     def create_widgets(self):
         """创建界面组件"""
@@ -72,31 +74,53 @@ class MemeFinderGUI:
     def _set_window_icon(self):
         """设置窗口图标"""
         try:
-            # 获取项目根目录
             project_root = Path(__file__).parent.parent.parent
+            icon_path = project_root / 'assets' / 'icon.ico'
             
-            # 按优先级尝试加载图标
-            icon_paths = [
-                project_root / 'assets' / 'icon.ico',  # Windows ICO格式
-                project_root / 'assets' / 'icon.png',  # PNG格式
-                project_root / 'img' / 'icon.ico',
-                project_root / 'img' / 'icon.png',
-            ]
+            if icon_path.exists():
+                icon_str = str(icon_path.resolve())
+                
+                # 设置Tkinter图标
+                self.root.iconbitmap(default=icon_str)
+                self.root.iconbitmap(icon_str)
+                
+                # Windows任务栏图标需要通过API设置
+                if sys.platform == 'win32':
+                    self.root.after(200, lambda: self._set_taskbar_icon(icon_str))
+                return
             
-            for icon_path in icon_paths:
-                if icon_path.exists():
-                    if icon_path.suffix.lower() == '.ico':
-                        # Windows ICO格式
-                        self.root.iconbitmap(str(icon_path))
-                    else:
-                        # PNG格式，使用PhotoImage
-                        icon = tk.PhotoImage(file=str(icon_path))
-                        self.root.iconphoto(True, icon)
-                    return
+        except Exception:
+            pass
+    
+    def _set_taskbar_icon(self, icon_path):
+        """设置Windows任务栏图标"""
+        try:
+            import ctypes
             
-            # 如果没有找到图标文件，静默失败
-        except Exception as e:
-            # 图标加载失败不影响程序运行
+            # 确保窗口已经完全显示
+            self.root.update_idletasks()
+            
+            # 加载图标文件
+            hicon = ctypes.windll.user32.LoadImageW(
+                0,          # hinst (NULL表示从文件加载)
+                icon_path,  # 图标文件路径
+                1,          # IMAGE_ICON
+                0, 0,       # 使用默认大小
+                0x00000010 | 0x00008000  # LR_LOADFROMFILE | LR_DEFAULTSIZE
+            )
+            
+            if hicon:
+                # 获取窗口句柄
+                hwnd = self.root.winfo_id()
+                
+                # WM_SETICON = 0x0080
+                # ICON_SMALL = 0, ICON_BIG = 1
+                ctypes.windll.user32.SendMessageW(hwnd, 0x0080, 1, hicon)  # 任务栏大图标
+                ctypes.windll.user32.SendMessageW(hwnd, 0x0080, 0, hicon)  # 标题栏小图标
+                
+                # 强制刷新窗口
+                self.root.update()
+        except Exception:
             pass
     
     def _on_tab_changed(self, event):

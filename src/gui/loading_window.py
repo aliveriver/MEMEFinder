@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import ttk
 import threading
 import time
+import sys
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -273,10 +274,13 @@ class ModelLoadingWindow(LoadingWindow):
                 if icon_path.exists():
                     if icon_path.suffix.lower() == '.ico':
                         self.window.iconbitmap(str(icon_path))
+                        return
                     else:
                         icon = tk.PhotoImage(file=str(icon_path))
                         self.window.iconphoto(True, icon)
-                    return
+                        # 保存引用防止被垃圾回收
+                        self.window._icon = icon
+                        return
         except Exception:
             pass
     

@@ -254,18 +254,14 @@ class OCRProcessor:
                     
                     # GPU模式下验证是否真的使用了GPU
                     if use_gpu:
-                        # 检查实际使用的设备
                         if hasattr(self.ocr, 'text_det') and hasattr(self.ocr.text_det, 'session'):
                             providers = self.ocr.text_det.session.get_providers()
                             if 'CUDAExecutionProvider' in providers:
                                 actual_gpu_available = True
-                                logger.info("✓ GPU 模式验证成功，CUDA可用")
                             else:
                                 logger.warning("⚠ GPU初始化请求被忽略，RapidOCR自动降级到CPU模式")
-                                logger.warning(f"  可用提供者: {providers}")
                                 use_gpu = False
                         else:
-                            logger.warning("⚠ 无法验证GPU状态，可能已降级到CPU模式")
                             use_gpu = False
                 
                 except Exception as init_error:
@@ -287,52 +283,13 @@ class OCRProcessor:
                 error_msg = str(e)
                 logger.error(f"✗ RapidOCR 初始化失败: {error_msg}")
                 
-                # 分析错误原因并给出建议
+                # GPU模式失败，自动切换到CPU
                 if use_gpu:
-                    logger.warning("=" * 60)
-                    logger.warning("⚠ GPU模式初始化失败")
-                    logger.warning("=" * 60)
-                    
-                    # 分析具体错误
-                    if "Timeout" in error_msg or "超时" in error_msg:
-                        logger.warning("错误类型: 初始化超时")
-                        logger.warning("可能原因:")
-                        logger.warning("  1. 打包后的程序缺少CUDA相关的DLL文件")
-                        logger.warning("  2. GPU驱动存在问题或版本不兼容")
-                        logger.warning("  3. onnxruntime-gpu加载CUDA库时卡住")
-                        logger.warning("")
-                        logger.warning("说明:")
-                        logger.warning("  这是打包程序在某些GPU环境下的已知问题")
-                        logger.warning("  程序将自动切换到CPU模式，不影响使用")
-                    elif "CUDA" in error_msg or "cuda" in error_msg:
-                        logger.warning("错误类型: CUDA相关")
-                        logger.warning("可能原因:")
-                        logger.warning("  1. CUDA版本与onnxruntime-gpu不匹配")
-                        logger.warning("  2. 缺少cuDNN库")
-                        logger.warning("  3. CUDA驱动损坏")
-                        logger.warning("")
-                        logger.warning("修复建议:")
-                        logger.warning("  1. 检查CUDA版本: nvidia-smi")
-                        logger.warning("  2. 重新安装onnxruntime-gpu:")
-                        logger.warning("     pip uninstall onnxruntime onnxruntime-gpu")
-                        logger.warning("     pip install onnxruntime-gpu")
-                        logger.warning("  3. 或者使用CPU模式（稳定可靠）")
+                    logger.warning("⚠ GPU模式初始化失败，自动切换到CPU模式")
+                    if "CUDA" in error_msg or "cuda" in error_msg:
+                        logger.warning("  原因: CUDA版本不匹配或缺少cuDNN库")
                     elif "DLL" in error_msg or "load" in error_msg:
-                        logger.warning("错误类型: 库文件加载失败")
-                        logger.warning("可能原因:")
-                        logger.warning("  1. 缺少必要的DLL文件")
-                        logger.warning("  2. Visual C++ 运行库未安装")
-                        logger.warning("")
-                        logger.warning("修复建议:")
-                        logger.warning("  1. 安装 Visual C++ Redistributable")
-                        logger.warning("  2. 使用CPU模式")
-                    else:
-                        logger.warning("错误类型: 未知")
-                        logger.warning("建议使用CPU模式以保证程序稳定运行")
-                    
-                    logger.warning("=" * 60)
-                    logger.warning("正在自动切换到CPU模式...")
-                    logger.warning("=" * 60)
+                        logger.warning("  原因: 缺少必要的DLL文件")
                     
                     try:
                         # 切换到CPU模式
@@ -430,27 +387,12 @@ class OCRProcessor:
             target_dir: 目标模型目录
         """
         try:
-            # 检查目标目录是否有模型文件
             target_onnx = list(target_dir.rglob('*.onnx'))
             if target_onnx:
                 total_size = sum(f.stat().st_size for f in target_onnx) / (1024 * 1024)
-                logger.info(f"✓ 模型文件已在目标目录: {target_dir}")
-                logger.info(f"  找到 {len(target_onnx)} 个模型文件，总大小: {total_size:.2f} MB")
-                
-                # 列出主要模型文件
-                main_models = ['det', 'rec', 'cls']
-                for model_type in main_models:
-                    model_files = [f for f in target_onnx if model_type.lower() in f.name.lower()]
-                    if model_files:
-                        logger.info(f"    - {model_type.upper()}: {model_files[0].name}")
-                return
-            
-            # 如果目标目录没有模型，检查是否在下载中
-            logger.info(f"模型文件将在首次使用时自动下载到: {target_dir}")
-            logger.info("  下载完成后，模型将保存在此目录，无需再次下载")
-                
-        except Exception as e:
-            logger.warning(f"检查模型位置时出错: {e}")
+                logger.info(f"✓ 模型文件已就绪 ({len(target_onnx)} 个文件, {total_size:.2f} MB)")
+        except Exception:
+            pass
 
     def process_image(self, image_path: Path, pad_ratio: float = 0.10) -> Dict[str, Any]:
         """
