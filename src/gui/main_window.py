@@ -6,6 +6,7 @@
 
 import tkinter as tk
 from tkinter import ttk, messagebox
+from pathlib import Path
 
 from .source_tab import SourceTab
 from .process_tab import ProcessTab
@@ -20,6 +21,9 @@ class MemeFinderGUI:
         self.root = root
         self.root.title("表情包查找器 - MEMEFinder")
         self.root.geometry("1000x700")
+        
+        # 设置窗口图标
+        self._set_window_icon()
         
         # 数据库
         self.db = ImageDatabase()
@@ -64,6 +68,36 @@ class MemeFinderGUI:
     def update_status(self, message: str):
         """更新状态栏"""
         self.status_bar.config(text=message)
+    
+    def _set_window_icon(self):
+        """设置窗口图标"""
+        try:
+            # 获取项目根目录
+            project_root = Path(__file__).parent.parent.parent
+            
+            # 按优先级尝试加载图标
+            icon_paths = [
+                project_root / 'assets' / 'icon.ico',  # Windows ICO格式
+                project_root / 'assets' / 'icon.png',  # PNG格式
+                project_root / 'img' / 'icon.ico',
+                project_root / 'img' / 'icon.png',
+            ]
+            
+            for icon_path in icon_paths:
+                if icon_path.exists():
+                    if icon_path.suffix.lower() == '.ico':
+                        # Windows ICO格式
+                        self.root.iconbitmap(str(icon_path))
+                    else:
+                        # PNG格式，使用PhotoImage
+                        icon = tk.PhotoImage(file=str(icon_path))
+                        self.root.iconphoto(True, icon)
+                    return
+            
+            # 如果没有找到图标文件，静默失败
+        except Exception as e:
+            # 图标加载失败不影响程序运行
+            pass
     
     def _on_tab_changed(self, event):
         """标签页切换事件处理"""

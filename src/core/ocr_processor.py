@@ -239,6 +239,7 @@ class OCRProcessor:
             # 尝试初始化 RapidOCR，如果GPU模式失败则自动回退到CPU
             ocr_initialized = False
             last_error = None
+            actual_gpu_available = False
             
             try:
                 logger.info(f"尝试初始化 RapidOCR ({'GPU' if use_gpu else 'CPU'} 模式)...")
@@ -251,10 +252,21 @@ class OCRProcessor:
                     if self.ocr is None:
                         raise Exception("RapidOCR 初始化返回 None")
                     
-                    # GPU模式下额外验证
+                    # GPU模式下验证是否真的使用了GPU
                     if use_gpu:
-                        logger.info("GPU 模式初始化成功，验证中...")
-                        # 不再使用超时机制，直接初始化可以避免线程问题
+                        # 检查实际使用的设备
+                        if hasattr(self.ocr, 'text_det') and hasattr(self.ocr.text_det, 'session'):
+                            providers = self.ocr.text_det.session.get_providers()
+                            if 'CUDAExecutionProvider' in providers:
+                                actual_gpu_available = True
+                                logger.info("✓ GPU 模式验证成功，CUDA可用")
+                            else:
+                                logger.warning("⚠ GPU初始化请求被忽略，RapidOCR自动降级到CPU模式")
+                                logger.warning(f"  可用提供者: {providers}")
+                                use_gpu = False
+                        else:
+                            logger.warning("⚠ 无法验证GPU状态，可能已降级到CPU模式")
+                            use_gpu = False
                 
                 except Exception as init_error:
                     # 如果是GPU模式失败，记录错误并准备降级
@@ -352,22 +364,40 @@ class OCRProcessor:
             actual_device = "未知"
             try:
                 # 尝试从OCR对象获取设备信息
-                if hasattr(self.ocr, 'det_model') and hasattr(self.ocr.det_model, 'session'):
+                if hasattr(self.ocr, 'text_det') and hasattr(self.ocr.text_det, 'session'):
+                    providers = self.ocr.text_det.session.get_providers()
+                    if 'CUDAExecutionProvider' in providers:
+                        actual_device = "GPU (CUDA)"
+                        actual_gpu_available = True
+                    elif 'DmlExecutionProvider' in providers:
+                        actual_device = "GPU (DirectML)"
+                        actual_gpu_available = True
+                    else:
+                        actual_device = "CPU"
+                        actual_gpu_available = False
+                elif hasattr(self.ocr, 'det_model') and hasattr(self.ocr.det_model, 'session'):
                     providers = self.ocr.det_model.session.get_providers()
                     if 'CUDAExecutionProvider' in providers:
                         actual_device = "GPU (CUDA)"
+                        actual_gpu_available = True
                     elif 'DmlExecutionProvider' in providers:
                         actual_device = "GPU (DirectML)"
+                        actual_gpu_available = True
                     else:
                         actual_device = "CPU"
+                        actual_gpu_available = False
             except:
                 # 如果无法获取，使用我们设置的use_gpu值
-                actual_device = "GPU" if use_gpu else "CPU"
+                actual_device = "CPU (降级)"
+                actual_gpu_available = False
             
             device_type = "GPU" if use_gpu else "CPU"
             logger.info(f"✓ RapidOCR 初始化成功")
             logger.info(f"  配置模式: {device_type}")
             logger.info(f"  实际设备: {actual_device}")
+            if use_gpu and not actual_gpu_available:
+                logger.warning("  ⚠ 注意：请求GPU模式但实际运行在CPU模式")
+                logger.warning("  可能原因：缺少cuDNN库或CUDA版本不匹配")
             logger.info("RapidOCR 优势：轻量级、易打包、无复杂依赖")
             
             # 检查模型文件位置（初始化后再次检查）
