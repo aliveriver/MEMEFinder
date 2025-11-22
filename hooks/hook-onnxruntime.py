@@ -45,8 +45,17 @@ try:
 except Exception as e:
     print(f"[HOOK-onnxruntime] 警告: {e}")
 
-# 隐藏导入
+# 隐藏导入 - 确保 onnxruntime 的所有关键模块都被包含
 hiddenimports = [
     'onnxruntime.capi',
     'onnxruntime.capi.onnxruntime_pybind11_state',
+    'onnxruntime.capi._pybind_state',
+    'onnxruntime.transformers',
+    # 以下是关键的枚举和类，需要明确导入
+    'onnxruntime.GraphOptimizationLevel',
+    'onnxruntime.ExecutionMode',
+    'onnxruntime.SessionOptions',
+    'onnxruntime.RunOptions',
+    'onnxruntime.InferenceSession',
 ]
+

@@ -56,7 +56,11 @@ class SearchTab:
         
         # 搜索按钮
         ttk.Button(search_frame, text="🔍 搜索", 
-                  command=self.search_images).grid(row=0, column=4, padx=10)
+                  command=self.search_images).grid(row=0, column=4, padx=5)
+        
+        # 刷新按钮
+        ttk.Button(search_frame, text="🔄 刷新", 
+                  command=self.refresh_page).grid(row=0, column=5, padx=5)
         
         # 结果列表
         result_frame = ttk.LabelFrame(self.frame, text="搜索结果", padding=10)
@@ -131,6 +135,10 @@ class SearchTab:
     def search_images(self):
         """搜索图片（重置为第一页并加载）"""
         self.page_var.set(1)
+        self.load_page()
+    
+    def refresh_page(self):
+        """刷新当前页面（保持当前页码和搜索条件）"""
         self.load_page()
 
     def load_page(self):
