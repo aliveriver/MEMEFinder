@@ -37,7 +37,7 @@ resource_monitor = get_resource_monitor()
 class OCRProcessor:
     """OCR处理器 - 使用 RapidOCR（轻量级，易于打包）"""
 
-    def __init__(self, lang: str = 'ch', use_gpu: Optional[bool] = None, det_side: int = 1536, use_senta: bool = True, model_dir: Optional[Path] = None):
+    def __init__(self, lang: str = 'ch', use_gpu: Optional[bool] = None, det_side: int = 1536, use_senta: bool = True, model_dir: Optional[Path] = None, lazy_load: bool = False):
         """
         初始化OCR处理器
 
@@ -47,12 +47,16 @@ class OCRProcessor:
             det_side: 检测侧边长度，默认1536（可降低以减少内存）
             use_senta: 是否使用情绪分析模型，默认True（优先使用 SnowNLP，快速且准确）
             model_dir: 模型存储目录，None表示使用默认路径（根目录的models文件夹）
+            lazy_load: 是否延迟加载，True时不立即加载模型
         """
         logger.info("=" * 60)
         logger.info("初始化 OCR 处理器（RapidOCR）...")
         
         self.lang = lang
         self.det_side = det_side
+        self._lazy_load = lazy_load
+        self._ocr_loaded = False
+        self.ocr = None
         
         # 处理计数器（用于定期清理内存）
         self._process_count = 0
@@ -60,15 +64,33 @@ class OCRProcessor:
 
         # 设置模型存储路径
         if model_dir is None:
-            # 默认使用项目根目录的models文件夹
-            project_root = Path(__file__).parent.parent.parent
-            model_dir = project_root / 'models'
+            # 使用模型管理器获取模型目录
+            from ..utils.model_manager import get_model_manager
+            model_manager = get_model_manager()
+            model_dir = model_manager.get_model_dir()
         
         # 确保模型目录存在
         model_dir = Path(model_dir)
         model_dir.mkdir(parents=True, exist_ok=True)
         
+        
         logger.info(f"模型存储路径: {model_dir}")
+
+        # 保存参数供延迟加载使用
+        self.use_gpu = use_gpu
+        self._use_senta_flag = use_senta
+        
+        # 如果是延迟加载模式，跳过模型初始化
+        if lazy_load:
+            logger.info("延迟加载模式：OCR模型将在首次使用时加载")
+            # 保存模型目录路径
+            self.model_dir = model_dir
+            # 初始化情绪分析（可选）
+            self._senta = None
+            self._use_senta = False
+            logger.info("OCR 处理器初始化完成（延迟加载模式）")
+            logger.info("=" * 60)
+            return
 
         # 检查是否通过环境变量强制使用 CPU 模式
         force_cpu = os.environ.get('MEMEFINDER_FORCE_CPU', '').lower() in ('1', 'true', 'yes')
@@ -383,6 +405,78 @@ class OCRProcessor:
                 logger.info(f"✓ 模型文件已就绪 ({len(target_onnx)} 个文件, {total_size:.2f} MB)")
         except Exception:
             pass
+    
+    def load_ocr_model(self) -> bool:
+        """
+        加载OCR模型（用于延迟加载）
+        
+        Returns:
+            是否加载成功
+        """
+        if self._ocr_loaded and self.ocr is not None:
+            logger.info("OCR模型已经加载")
+            return True
+        
+        logger.info("开始加载OCR模型...")
+        
+        # 使用保存的use_gpu参数
+        use_gpu = self.use_gpu
+        
+        # 检查模型文件是否存在
+        det_model = self.model_dir / 'ch_PP-OCRv4_det_infer.onnx'
+        rec_model = self.model_dir / 'ch_PP-OCRv4_rec_infer.onnx'
+        cls_model_v2 = self.model_dir / 'ch_ppocr_mobile_v2.0_cls_infer.onnx'
+        cls_model = cls_model_v2 if cls_model_v2.exists() else self.model_dir / 'ch_ppocr_mobile_v2_cls_infer.onnx'
+        
+        missing_models = []
+        if not det_model.exists():
+            missing_models.append(f"检测模型: {det_model.name}")
+        if not rec_model.exists():
+            missing_models.append(f"识别模型: {rec_model.name}")
+        if not cls_model.exists():
+            missing_models.append(f"方向分类: {cls_model.name}")
+        
+        if missing_models:
+            logger.error("=" * 60)
+            logger.error("缺少以下模型文件:")
+            for model in missing_models:
+                logger.error(f"  - {model}")
+            logger.error("")
+            logger.error("请通过界面的\"下载模型\"功能下载OCR模型")
+            logger.error("=" * 60)
+            return False
+        
+        try:
+            # 构建RapidOCR初始化参数
+            rapidocr_kwargs: Dict[str, Any] = {
+                'det_use_cuda': use_gpu,
+                'cls_use_cuda': use_gpu,
+                'rec_use_cuda': use_gpu,
+                'det_model_path': str(det_model),
+                'rec_model_path': str(rec_model),
+                'cls_model_path': str(cls_model),
+            }
+            
+            # 初始化RapidOCR
+            self.ocr = RapidOCR(**rapidocr_kwargs)
+            
+            if self.ocr is None:
+                raise Exception("RapidOCR 初始化返回 None")
+            
+            self._ocr_loaded = True
+            logger.info("✓ OCR模型加载成功")
+            
+            # 初始化情感分析（如果需要）
+            if self._use_senta_flag:
+                self._init_senta()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"✗ OCR模型加载失败: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return False
 
     def process_image(self, image_path: Path, pad_ratio: float = 0.10) -> Dict[str, Any]:
         """
@@ -402,6 +496,18 @@ class OCRProcessor:
             }
         """
         try:
+            # 如果启用了延迟加载且OCR未初始化，先加载模型
+            if self._lazy_load and not self._ocr_loaded:
+                if not self.load_ocr_model():
+                    logger.error("OCR模型加载失败，无法处理图片")
+                    return {
+                        'ocr_text': '',
+                        'filtered_text': '',
+                        'emotion': '未分类',
+                        'emotion_positive': 0.0,
+                        'emotion_negative': 0.0
+                    }
+            
             # 定期执行垃圾回收以释放内存
             self._process_count += 1
             if self._process_count % self._gc_interval == 0:

@@ -65,15 +65,19 @@ class ProcessTab:
         btn_frame = ttk.Frame(self.frame)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        ttk.Button(btn_frame, text="▶️ 开始处理", 
+        # 第一行：基本控制按钮
+        control_row1 = ttk.Frame(btn_frame)
+        control_row1.pack(fill=tk.X, pady=2)
+        
+        ttk.Button(control_row1, text="▶️ 开始处理", 
                   command=self.start_processing).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="⏸️ 暂停", 
+        ttk.Button(control_row1, text="⏸️ 暂停", 
                   command=self.pause_processing).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="⏹️ 停止", 
+        ttk.Button(control_row1, text="⏹️ 停止", 
                   command=self.stop_processing).pack(side=tk.LEFT, padx=5)
         
         # 多线程设置
-        thread_frame = ttk.Frame(btn_frame)
+        thread_frame = ttk.Frame(control_row1)
         thread_frame.pack(side=tk.LEFT, padx=20)
         
         ttk.Label(thread_frame, text="并行线程数:").pack(side=tk.LEFT, padx=5)
@@ -84,6 +88,32 @@ class ProcessTab:
         self.multithread_var = tk.BooleanVar(value=self.use_multithread)
         ttk.Checkbutton(thread_frame, text="启用多线程", 
                        variable=self.multithread_var).pack(side=tk.LEFT, padx=5)
+        
+        # 第二行：模型管理按钮
+        control_row2 = ttk.Frame(btn_frame)
+        control_row2.pack(fill=tk.X, pady=2)
+        
+        # 模型状态检查按钮
+        ttk.Button(control_row2, text="🔍 检查模型状态", 
+                  command=self.check_model_status).pack(side=tk.LEFT, padx=5)
+        
+        # OCR开关
+        self.enable_ocr_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(control_row2, text="启用OCR", 
+                       variable=self.enable_ocr_var,
+                       command=self.on_ocr_toggle).pack(side=tk.LEFT, padx=5)
+        
+        # 情感分析开关
+        self.enable_sentiment_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(control_row2, text="启用情感分析", 
+                       variable=self.enable_sentiment_var,
+                       command=self.on_sentiment_toggle).pack(side=tk.LEFT, padx=5)
+        
+        # 下载模型按钮
+        ttk.Button(control_row2, text="📥 下载OCR模型", 
+                  command=self.download_ocr_models).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_row2, text="📥 下载情感分析模型", 
+                  command=self.download_sentiment_model).pack(side=tk.LEFT, padx=5)
         
         # 进度信息
         progress_frame = ttk.LabelFrame(self.frame, text="处理进度", padding=10)
@@ -104,6 +134,199 @@ class ProcessTab:
         self.log_text = scrolledtext.ScrolledText(log_frame, height=20, wrap=tk.WORD)
         self.log_text.pack(fill=tk.BOTH, expand=True)
     
+    def on_ocr_toggle(self):
+        """OCR开关切换事件"""
+        enabled = self.enable_ocr_var.get()
+        if enabled:
+            # 检查OCR模型是否存在
+            from ..utils.model_manager import get_model_manager
+            model_manager = get_model_manager()
+            all_exists, missing = model_manager.check_ocr_models()
+            
+            if not all_exists:
+                self.log_message("[警告] OCR模型未下载，请先下载模型")
+                self.log_message(f"[警告] 缺失模型: {', '.join(missing)}")
+                messagebox.showwarning("警告", 
+                    f"OCR模型未下载！\n\n缺失的模型:\n" + "\n".join(f"  - {m}" for m in missing) + 
+                    f"\n\n模型目录: {model_manager.get_model_dir()}\n\n" +
+                    "请点击\"下载OCR模型\"按钮获取下载说明。")
+                self.enable_ocr_var.set(False)
+                return
+            
+            self.log_message("[信息] OCR功能已启用")
+        else:
+            self.log_message("[信息] OCR功能已禁用")
+    
+    def on_sentiment_toggle(self):
+        """情感分析开关切换事件"""
+        enabled = self.enable_sentiment_var.get()
+        if enabled:
+            # 检查情感分析模型是否安装
+            from ..utils.model_manager import get_model_manager
+            model_manager = get_model_manager()
+            installed, model_name = model_manager.check_sentiment_model()
+            
+            if not installed:
+                self.log_message("[警告] 情感分析模型未安装")
+                result = messagebox.askyesno("提示", 
+                    "情感分析模型（SnowNLP）未安装！\n\n" +
+                    "是否现在安装？")
+                if result:
+                    self.download_sentiment_model()
+                else:
+                    self.enable_sentiment_var.set(False)
+                return
+            
+            self.log_message(f"[信息] 情感分析功能已启用 (使用 {model_name})")
+        else:
+            self.log_message("[信息] 情感分析功能已禁用")
+    
+    def download_ocr_models(self):
+        """下载OCR模型"""
+        from ..utils.model_manager import get_model_manager
+        model_manager = get_model_manager()
+        
+        # 检查是否已安装
+        all_exists, missing = model_manager.check_ocr_models()
+        if all_exists:
+            messagebox.showinfo("提示", "OCR模型已存在，无需下载！")
+            return
+        
+        # 询问用户是否开始下载
+        model_dir = model_manager.get_model_dir()
+        result = messagebox.askyesno("确认下载", 
+            f"将从rapidocr_onnxruntime包自动复制OCR模型到:\n{model_dir}\n\n"
+            f"缺失的模型:\n" + "\n".join(f"  - {m}" for m in missing) + "\n\n"
+            "是否开始下载？")
+        
+        if not result:
+            return
+        
+        self.log_message("=" * 50)
+        self.log_message("[下载] 开始下载OCR模型...")
+        
+        def download_progress(current, total, message):
+            self.log_message(f"[下载] {message}")
+        
+        # 在后台线程中下载
+        def download_thread():
+            success = model_manager.download_ocr_models(download_progress)
+            if success:
+                self.log_message("[成功] OCR模型下载完成！")
+                self.log_message("=" * 50)
+                messagebox.showinfo("成功", "OCR模型下载成功！\n可以启用OCR功能了。")
+                # 如果下载成功，自动启用OCR
+                self.enable_ocr_var.set(True)
+            else:
+                self.log_message("[失败] OCR模型下载失败")
+                self.log_message("=" * 50)
+                messagebox.showerror("失败", 
+                    "OCR模型下载失败！\n\n"
+                    "可能的原因:\n"
+                    "1. 未安装rapidocr_onnxruntime包\n"
+                    "2. rapidocr_onnxruntime包中缺少模型文件\n\n"
+                    "请查看处理日志获取详细信息。")
+        
+        threading.Thread(target=download_thread, daemon=True).start()
+    
+    def download_sentiment_model(self):
+        """下载/安装情感分析模型"""
+        from ..utils.model_manager import get_model_manager
+        model_manager = get_model_manager()
+        
+        # 检查是否已安装
+        installed, model_name = model_manager.check_sentiment_model()
+        if installed:
+            messagebox.showinfo("提示", f"情感分析模型已安装 ({model_name})！")
+            return
+        
+        self.log_message("[信息] 开始安装 SnowNLP...")
+        
+        def install_progress(current, total, message):
+            self.log_message(f"[安装] {message}")
+        
+        # 在后台线程中安装
+        def install_thread():
+            success = model_manager.install_sentiment_model(install_progress)
+            if success:
+                self.log_message("[成功] SnowNLP 安装成功！")
+                messagebox.showinfo("成功", "SnowNLP 安装成功！")
+            else:
+                self.log_message("[失败] SnowNLP 安装失败")
+                messagebox.showerror("失败", "SnowNLP 安装失败，请查看日志")
+        
+        threading.Thread(target=install_thread, daemon=True).start()
+    
+    def check_model_status(self):
+        """检查模型状态"""
+        from ..utils.model_manager import get_model_manager
+        model_manager = get_model_manager()
+        
+        self.log_message("=" * 50)
+        self.log_message("[状态检查] 正在检查模型状态...")
+        
+        # 检查OCR模型
+        ocr_exists, ocr_missing = model_manager.check_ocr_models()
+        
+        # 检查情感分析模型
+        sentiment_installed, sentiment_name = model_manager.check_sentiment_model()
+        
+        # 获取模型目录
+        model_dir = model_manager.get_model_dir()
+        
+        # 构建状态报告
+        status_report = f"""模型状态检查报告
+        
+模型存储目录:
+{model_dir}
+
+【OCR模型状态】
+"""
+        
+        if ocr_exists:
+            status_report += "✅ OCR模型已安装\n"
+            status_report += "  - ch_PP-OCRv4_det_infer.onnx (检测模型)\n"
+            status_report += "  - ch_PP-OCRv4_rec_infer.onnx (识别模型)\n"
+            status_report += "  - ch_ppocr_mobile_v2.0_cls_infer.onnx (方向分类)\n"
+        else:
+            status_report += "❌ OCR模型未完整安装\n"
+            status_report += f"  缺失的模型:\n"
+            for model in ocr_missing:
+                status_report += f"  - {model}\n"
+            status_report += "\n  建议：点击'下载OCR模型'按钮进行安装\n"
+        
+        status_report += "\n【情感分析模型状态】\n"
+        
+        if sentiment_installed:
+            status_report += f"✅ 情感分析模型已安装 ({sentiment_name})\n"
+        else:
+            status_report += "❌ 情感分析模型未安装\n"
+            status_report += "  建议：点击'下载情感分析模型'按钮进行安装\n"
+        
+        status_report += "\n【OCR处理器状态】\n"
+        if self._ocr_initialized and self.ocr_processor:
+            if hasattr(self.ocr_processor, '_ocr_loaded') and self.ocr_processor._ocr_loaded:
+                status_report += "✅ OCR处理器已加载并就绪\n"
+            else:
+                status_report += "⏳ OCR处理器已初始化（延迟加载模式，将在首次使用时加载）\n"
+        else:
+            status_report += "❌ OCR处理器未初始化\n"
+        
+        # 显示状态报告
+        self.log_message(status_report)
+        self.log_message("=" * 50)
+        
+        # 弹窗显示简洁版本
+        summary = f"""模型状态:\n
+OCR模型: {'✅ 已安装' if ocr_exists else '❌ 未安装'}
+情感分析: {'✅ 已安装 (' + sentiment_name + ')' if sentiment_installed else '❌ 未安装'}
+
+模型目录: {model_dir}
+
+详细信息请查看处理日志。"""
+        
+        messagebox.showinfo("模型状态", summary)
+    
     def _initialize_ocr(self):
         """初始化OCR处理器（如果尚未初始化）"""
         if self._ocr_initialized and self.ocr_processor:
@@ -112,17 +335,24 @@ class ProcessTab:
         # 如果没有预加载的实例，则现在加载
         if self.ocr_processor is None:
             try:
-                self.log_message("[INFO] 正在初始化 OCR 模型...")
+                self.log_message("[INFO] 正在初始化 OCR 处理器（延迟加载模式）...")
                 from pathlib import Path
+                from ..utils.model_manager import get_model_manager
                 
-                # 获取项目根目录的models文件夹
-                project_root = Path(__file__).parent.parent.parent
-                model_dir = project_root / 'models'
+                # 使用模型管理器获取模型目录
+                model_manager = get_model_manager()
+                model_dir = model_manager.get_model_dir()
                 
-                # 使用自动GPU检测和指定的模型目录
-                self.ocr_processor = OCRProcessor(use_gpu=None, model_dir=model_dir)
+                # 使用延迟加载模式初始化OCR处理器
+                self.ocr_processor = OCRProcessor(
+                    use_gpu=None, 
+                    model_dir=model_dir, 
+                    lazy_load=True,  # 启用延迟加载
+                    use_senta=self.enable_sentiment_var.get()  # 根据用户设置启用情感分析
+                )
                 self._ocr_initialized = True
-                self.log_message("[INFO] OCR 模型加载完成")
+                self.log_message("[INFO] OCR 处理器初始化完成（延迟加载模式）")
+                self.log_message("[INFO] OCR模型将在首次使用时加载")
                 return True
             except Exception as e:
                 error_msg = f"OCR 初始化失败: {e}"
@@ -135,7 +365,7 @@ class ProcessTab:
         else:
             # 已经有预加载的实例
             self._ocr_initialized = True
-            self.log_message("[INFO] 使用预加载的 OCR 模型")
+            self.log_message("[INFO] 使用预加载的 OCR 处理器")
             return True
     
     def start_processing(self):
@@ -250,9 +480,50 @@ class ProcessTab:
                     'error': '文件不存在'
                 }
             
+            # 检查是否启用OCR
+            enable_ocr = self.enable_ocr_var.get()
+            enable_sentiment = self.enable_sentiment_var.get()
+            
+            if not enable_ocr:
+                # 如果OCR未启用，直接返回空结果
+                self.db.update_image_data(
+                    image_id=img_id,
+                    ocr_text='',
+                    filtered_text='',
+                    emotion='未处理',
+                    pos_score=0.0,
+                    neg_score=0.0
+                )
+                return {
+                    'success': True,
+                    'id': img_id,
+                    'path': img_path,
+                    'result': {
+                        'ocr_text': '',
+                        'filtered_text': '',
+                        'emotion': '未处理',
+                        'emotion_positive': 0.0,
+                        'emotion_negative': 0.0
+                    }
+                }
+            
             # OCR识别和情绪分析
             assert self.ocr_processor is not None, "OCR处理器未初始化"
-            result = self.ocr_processor.process_image(Path(img_path))
+            
+            # 如果禁用情感分析，临时修改ocr_processor的设置
+            if not enable_sentiment:
+                # 保存原始设置
+                original_use_senta = self.ocr_processor._use_senta
+                # 临时禁用情感分析
+                self.ocr_processor._use_senta = False
+                
+                try:
+                    result = self.ocr_processor.process_image(Path(img_path))
+                finally:
+                    # 恢复原始设置
+                    self.ocr_processor._use_senta = original_use_senta
+            else:
+                result = self.ocr_processor.process_image(Path(img_path))
             
             # 更新数据库
             self.db.update_image_data(

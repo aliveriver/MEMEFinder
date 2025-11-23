@@ -71,7 +71,7 @@ def generate_spec(version_name, console=False):
         ('src', 'src'),
         ('README.md', '.'),
         ('LICENSE', '.'),
-        ('models', 'models'),  # <--- 关键：包含模型目录
+        # 模型将由用户按需下载，不打包到发布版本中
     ]
     
     # 补丁文件检测
@@ -192,7 +192,20 @@ a = Analysis(
     hookspath=['hooks'],
     hooksconfig={{}},
     runtime_hooks=[],
-    excludes=['pytest', 'IPython', 'matplotlib', 'scipy'],
+    excludes=[
+        'pytest', 'IPython', 'matplotlib', 'scipy',
+        # 排除不必要的大型模块以减小打包体积
+        'PyQt5', 'PyQt6', 'PySide2', 'PySide6',  # 不使用Qt
+        'wx',  # 不使用wxPython
+        'tornado', 'django', 'flask_sqlalchemy',  # 不需要的Web框架
+        'numba', 'sympy',  # 不需要的科学计算库
+        'docutils', 'pygments',  # 文档工具
+        'PIL.ImageQt',  # Qt图像支持
+        # 数据处理库（项目未使用）
+        'pyarrow',  # Arrow/Parquet支持 - 约79MB
+        'pandas',  # 数据分析框架 - 约17MB
+        # 注意：不能排除snownlp本身，但可以通过hooks排除其数据文件
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -287,12 +300,6 @@ def main():
     print_color("       MEMEFinder GPU 版本打包工具", "green")
     print_color("="*60)
     
-    # 检查 models 目录
-    if not os.path.exists('models'):
-        print_color("错误: 当前目录下未找到 'models' 文件夹！", "red")
-        print("请先确保模型文件已下载。")
-        return
-
     # 1. 清理
     clean_build()
     

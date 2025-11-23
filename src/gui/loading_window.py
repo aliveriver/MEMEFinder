@@ -418,36 +418,43 @@ class ModelLoadingWindow(LoadingWindow):
             time.sleep(0.5)  # 模拟下载时间
     
     def _load_ocr_model(self):
-        """加载OCR模型"""
+        """加载OCR模型（使用延迟加载）"""
         try:
             # 检测GPU
             from ..utils.gpu_detector import detect_gpu, should_use_gpu
+            from ..utils.model_manager import get_model_manager
+            
             has_gpu, gpu_info = detect_gpu()
             use_gpu = should_use_gpu()
             
             if has_gpu and use_gpu:
-                self.set_progress(75, "正在加载文字识别引擎...", f"初始化表情包文字识别模块（{gpu_info}）")
+                self.set_progress(75, "正在初始化文字识别引擎...", f"准备表情包文字识别模块（{gpu_info}）")
             else:
-                self.set_progress(75, "正在加载文字识别引擎...", "初始化表情包文字识别模块（CPU模式）")
+                self.set_progress(75, "正在初始化文字识别引擎...", "准备表情包文字识别模块（CPU模式）")
             
-            # 实际加载OCR模型
+            # 使用延迟加载模式创建OCR处理器
             from ..core.ocr_processor import OCRProcessor
-            from pathlib import Path
             
-            # 获取项目根目录的models文件夹
-            project_root = Path(__file__).parent.parent.parent
-            model_dir = project_root / 'models'
+            # 获取模型目录
+            model_manager = get_model_manager()
+            model_dir = model_manager.get_model_dir()
             
-            # 创建OCR处理器实例（会自动检测GPU并使用指定的模型目录）
-            # use_gpu=None表示自动检测
-            self._ocr_instance = OCRProcessor(use_gpu=None, model_dir=model_dir)
+            # 创建OCR处理器实例（延迟加载模式，不立即加载模型）
+            # lazy_load=True表示不立即加载模型，等到首次使用时再1加载
+            self._ocr_instance = OCRProcessor(
+                use_gpu=None,  # 自动检测
+                model_dir=model_dir,
+                lazy_load=True,  # 关键：使用延迟加载
+                use_senta=True
+            )
             
             # 显示最终使用的设备
             device_type = "GPU" if use_gpu else "CPU"
-            self.set_progress(90, "文字识别引擎加载完成", f"已准备好识别表情包中的文字（{device_type}模式）")
+            self.set_progress(90, "文字识别引擎就绪", f"已准备好识别表情包中的文字（{device_type}模式，按需加载）")
             
         except Exception as e:
-            raise Exception(f"文字识别引擎加载失败: {e}")
+            raise Exception(f"文字识别引擎初始化失败: {e}")
+    
     
     def _load_sentiment_model(self):
         """加载情感分析模型（可选）"""
