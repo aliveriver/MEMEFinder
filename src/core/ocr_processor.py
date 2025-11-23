@@ -12,7 +12,7 @@ import os
 import threading
 import traceback
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Union
 
 import numpy as np
 from PIL import Image
@@ -68,17 +68,7 @@ class OCRProcessor:
         model_dir = Path(model_dir)
         model_dir.mkdir(parents=True, exist_ok=True)
         
-        # RapidOCR模型存储路径设置
-        # RapidOCR会将模型下载到用户目录下的.rapidocr文件夹
-        # 我们需要通过环境变量或符号链接来重定向到我们的目录
-        # 设置RAPIDOCR_HOME环境变量（如果RapidOCR支持）
-        os.environ['RAPIDOCR_HOME'] = str(model_dir)
-        
-        # 也尝试设置可能的其他环境变量
-        os.environ['RAPIDOCR_MODEL_DIR'] = str(model_dir)
-        
         logger.info(f"模型存储路径: {model_dir}")
-        logger.info(f"环境变量 RAPIDOCR_HOME: {os.environ.get('RAPIDOCR_HOME', '未设置')}")
 
         # 检查是否通过环境变量强制使用 CPU 模式
         force_cpu = os.environ.get('MEMEFINDER_FORCE_CPU', '').lower() in ('1', 'true', 'yes')
@@ -164,7 +154,7 @@ class OCRProcessor:
             
             # 构建RapidOCR初始化参数
             # 注意：GPU模式可能导致初始化失败，需要做好异常处理
-            rapidocr_kwargs = {
+            rapidocr_kwargs: Dict[str, Any] = {
                 'det_use_cuda': use_gpu,  # 检测模型是否使用CUDA
                 'cls_use_cuda': use_gpu,   # 方向分类是否使用CUDA  
                 'rec_use_cuda': use_gpu,   # 识别模型是否使用CUDA
@@ -239,6 +229,7 @@ class OCRProcessor:
             # 尝试初始化 RapidOCR，如果GPU模式失败则自动回退到CPU
             ocr_initialized = False
             last_error = None
+            actual_gpu_available = False
             
             try:
                 logger.info(f"尝试初始化 RapidOCR ({'GPU' if use_gpu else 'CPU'} 模式)...")
@@ -251,10 +242,17 @@ class OCRProcessor:
                     if self.ocr is None:
                         raise Exception("RapidOCR 初始化返回 None")
                     
-                    # GPU模式下额外验证
+                    # GPU模式下验证是否真的使用了GPU
                     if use_gpu:
-                        logger.info("GPU 模式初始化成功，验证中...")
-                        # 不再使用超时机制，直接初始化可以避免线程问题
+                        if hasattr(self.ocr, 'text_det') and hasattr(self.ocr.text_det, 'session'):
+                            providers = self.ocr.text_det.session.get_providers()  # type: ignore
+                            if 'CUDAExecutionProvider' in providers:
+                                actual_gpu_available = True
+                            else:
+                                logger.warning("⚠ GPU初始化请求被忽略，RapidOCR自动降级到CPU模式")
+                                use_gpu = False
+                        else:
+                            use_gpu = False
                 
                 except Exception as init_error:
                     # 如果是GPU模式失败，记录错误并准备降级
@@ -275,52 +273,13 @@ class OCRProcessor:
                 error_msg = str(e)
                 logger.error(f"✗ RapidOCR 初始化失败: {error_msg}")
                 
-                # 分析错误原因并给出建议
+                # GPU模式失败，自动切换到CPU
                 if use_gpu:
-                    logger.warning("=" * 60)
-                    logger.warning("⚠ GPU模式初始化失败")
-                    logger.warning("=" * 60)
-                    
-                    # 分析具体错误
-                    if "Timeout" in error_msg or "超时" in error_msg:
-                        logger.warning("错误类型: 初始化超时")
-                        logger.warning("可能原因:")
-                        logger.warning("  1. 打包后的程序缺少CUDA相关的DLL文件")
-                        logger.warning("  2. GPU驱动存在问题或版本不兼容")
-                        logger.warning("  3. onnxruntime-gpu加载CUDA库时卡住")
-                        logger.warning("")
-                        logger.warning("说明:")
-                        logger.warning("  这是打包程序在某些GPU环境下的已知问题")
-                        logger.warning("  程序将自动切换到CPU模式，不影响使用")
-                    elif "CUDA" in error_msg or "cuda" in error_msg:
-                        logger.warning("错误类型: CUDA相关")
-                        logger.warning("可能原因:")
-                        logger.warning("  1. CUDA版本与onnxruntime-gpu不匹配")
-                        logger.warning("  2. 缺少cuDNN库")
-                        logger.warning("  3. CUDA驱动损坏")
-                        logger.warning("")
-                        logger.warning("修复建议:")
-                        logger.warning("  1. 检查CUDA版本: nvidia-smi")
-                        logger.warning("  2. 重新安装onnxruntime-gpu:")
-                        logger.warning("     pip uninstall onnxruntime onnxruntime-gpu")
-                        logger.warning("     pip install onnxruntime-gpu")
-                        logger.warning("  3. 或者使用CPU模式（稳定可靠）")
+                    logger.warning("⚠ GPU模式初始化失败，自动切换到CPU模式")
+                    if "CUDA" in error_msg or "cuda" in error_msg:
+                        logger.warning("  原因: CUDA版本不匹配或缺少cuDNN库")
                     elif "DLL" in error_msg or "load" in error_msg:
-                        logger.warning("错误类型: 库文件加载失败")
-                        logger.warning("可能原因:")
-                        logger.warning("  1. 缺少必要的DLL文件")
-                        logger.warning("  2. Visual C++ 运行库未安装")
-                        logger.warning("")
-                        logger.warning("修复建议:")
-                        logger.warning("  1. 安装 Visual C++ Redistributable")
-                        logger.warning("  2. 使用CPU模式")
-                    else:
-                        logger.warning("错误类型: 未知")
-                        logger.warning("建议使用CPU模式以保证程序稳定运行")
-                    
-                    logger.warning("=" * 60)
-                    logger.warning("正在自动切换到CPU模式...")
-                    logger.warning("=" * 60)
+                        logger.warning("  原因: 缺少必要的DLL文件")
                     
                     try:
                         # 切换到CPU模式
@@ -352,22 +311,40 @@ class OCRProcessor:
             actual_device = "未知"
             try:
                 # 尝试从OCR对象获取设备信息
-                if hasattr(self.ocr, 'det_model') and hasattr(self.ocr.det_model, 'session'):
-                    providers = self.ocr.det_model.session.get_providers()
+                if hasattr(self.ocr, 'text_det') and hasattr(self.ocr.text_det, 'session'):
+                    providers = self.ocr.text_det.session.get_providers()  # type: ignore
                     if 'CUDAExecutionProvider' in providers:
                         actual_device = "GPU (CUDA)"
+                        actual_gpu_available = True
                     elif 'DmlExecutionProvider' in providers:
                         actual_device = "GPU (DirectML)"
+                        actual_gpu_available = True
                     else:
                         actual_device = "CPU"
+                        actual_gpu_available = False
+                elif hasattr(self.ocr, 'det_model') and hasattr(self.ocr.det_model, 'session'):  # type: ignore
+                    providers = self.ocr.det_model.session.get_providers()  # type: ignore
+                    if 'CUDAExecutionProvider' in providers:
+                        actual_device = "GPU (CUDA)"
+                        actual_gpu_available = True
+                    elif 'DmlExecutionProvider' in providers:
+                        actual_device = "GPU (DirectML)"
+                        actual_gpu_available = True
+                    else:
+                        actual_device = "CPU"
+                        actual_gpu_available = False
             except:
                 # 如果无法获取，使用我们设置的use_gpu值
-                actual_device = "GPU" if use_gpu else "CPU"
+                actual_device = "CPU (降级)"
+                actual_gpu_available = False
             
             device_type = "GPU" if use_gpu else "CPU"
             logger.info(f"✓ RapidOCR 初始化成功")
             logger.info(f"  配置模式: {device_type}")
             logger.info(f"  实际设备: {actual_device}")
+            if use_gpu and not actual_gpu_available:
+                logger.warning("  ⚠ 注意：请求GPU模式但实际运行在CPU模式")
+                logger.warning("  可能原因：缺少cuDNN库或CUDA版本不匹配")
             logger.info("RapidOCR 优势：轻量级、易打包、无复杂依赖")
             
             # 检查模型文件位置（初始化后再次检查）
@@ -400,27 +377,12 @@ class OCRProcessor:
             target_dir: 目标模型目录
         """
         try:
-            # 检查目标目录是否有模型文件
             target_onnx = list(target_dir.rglob('*.onnx'))
             if target_onnx:
                 total_size = sum(f.stat().st_size for f in target_onnx) / (1024 * 1024)
-                logger.info(f"✓ 模型文件已在目标目录: {target_dir}")
-                logger.info(f"  找到 {len(target_onnx)} 个模型文件，总大小: {total_size:.2f} MB")
-                
-                # 列出主要模型文件
-                main_models = ['det', 'rec', 'cls']
-                for model_type in main_models:
-                    model_files = [f for f in target_onnx if model_type.lower() in f.name.lower()]
-                    if model_files:
-                        logger.info(f"    - {model_type.upper()}: {model_files[0].name}")
-                return
-            
-            # 如果目标目录没有模型，检查是否在下载中
-            logger.info(f"模型文件将在首次使用时自动下载到: {target_dir}")
-            logger.info("  下载完成后，模型将保存在此目录，无需再次下载")
-                
-        except Exception as e:
-            logger.warning(f"检查模型位置时出错: {e}")
+                logger.info(f"✓ 模型文件已就绪 ({len(target_onnx)} 个文件, {total_size:.2f} MB)")
+        except Exception:
+            pass
 
     def process_image(self, image_path: Path, pad_ratio: float = 0.10) -> Dict[str, Any]:
         """
@@ -612,7 +574,7 @@ class OCRProcessor:
                         score = item[2] if len(item) > 2 else 1.0
                         
                         items.append({
-                            "box": box.tolist() if hasattr(box, 'tolist') else box,
+                            "box": box.tolist() if hasattr(box, 'tolist') else box,  # type: ignore
                             "text": str(text),
                             "score": float(score)
                         })
@@ -711,7 +673,7 @@ class OCRProcessor:
 
         # 方案2：尝试使用 TextBlob（适合英文）
         try:
-            from textblob import TextBlob
+            from textblob import TextBlob  # type: ignore
             logger.info("正在初始化 TextBlob 情绪分析模型...")
             
             # 测试模型
@@ -733,7 +695,7 @@ class OCRProcessor:
         self._senta = None
         self._use_senta = False
 
-    def _senta_analyze(self, text: str) -> Tuple[str, float, float]:
+    def _senta_analyze(self, text: str) -> Optional[Tuple[str, float, float]]:
         """
         使用深度学习模型进行情绪分析
 
@@ -772,7 +734,7 @@ class OCRProcessor:
 
             # 方案2：使用 TextBlob
             elif self._senta == 'textblob':
-                from textblob import TextBlob
+                from textblob import TextBlob  # type: ignore
                 blob = TextBlob(text)
                 polarity = blob.sentiment.polarity  # 返回 -1 到 1 之间的分数
                 

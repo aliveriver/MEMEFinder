@@ -10,6 +10,9 @@ from datetime import datetime
 from pathlib import Path
 import threading
 import os
+from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from queue import Queue
 
 from ..core.database import ImageDatabase
 from ..core.ocr_processor import OCRProcessor
@@ -27,12 +30,16 @@ class ProcessTab:
         self.stats_callback = stats_callback  # 用于更新统计信息的回调函数
         
         # OCR处理器（延迟初始化）
-        self.ocr_processor = None
+        self.ocr_processor: Optional[OCRProcessor] = None
         self._ocr_initialized = False
         
         # 处理状态
         self.processing = False
         self.processing_thread = None
+        
+        # 多线程配置
+        self.max_workers = 4  # 默认4个工作线程
+        self.use_multithread = True  # 是否启用多线程
         
         # 创建主框架
         self.frame = ttk.Frame(parent)
@@ -64,6 +71,19 @@ class ProcessTab:
                   command=self.pause_processing).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="⏹️ 停止", 
                   command=self.stop_processing).pack(side=tk.LEFT, padx=5)
+        
+        # 多线程设置
+        thread_frame = ttk.Frame(btn_frame)
+        thread_frame.pack(side=tk.LEFT, padx=20)
+        
+        ttk.Label(thread_frame, text="并行线程数:").pack(side=tk.LEFT, padx=5)
+        self.thread_spinbox = ttk.Spinbox(thread_frame, from_=1, to=16, width=5)
+        self.thread_spinbox.set(self.max_workers)
+        self.thread_spinbox.pack(side=tk.LEFT, padx=5)
+        
+        self.multithread_var = tk.BooleanVar(value=self.use_multithread)
+        ttk.Checkbutton(thread_frame, text="启用多线程", 
+                       variable=self.multithread_var).pack(side=tk.LEFT, padx=5)
         
         # 进度信息
         progress_frame = ttk.LabelFrame(self.frame, text="处理进度", padding=10)
@@ -182,95 +202,24 @@ class ProcessTab:
                 return
             
             total = len(unprocessed)
-            self.log_message(f"[INFO] 开始处理 {total} 张图片...")
             
-            processed_count = 0
-            error_count = 0
-            
-            for idx, img_info in enumerate(unprocessed, 1):
-                if not self.processing:
-                    self.log_message("[暂停] 处理已暂停")
-                    break
-                
-                img_id = img_info['id']
-                img_path = img_info['file_path']
-                
-                try:
-                    # 更新进度（线程安全）
-                    progress = (idx / total) * 100
-                    self.frame.after(0, lambda p=progress: self.progress_var.set(p))
-                    self.frame.after(0, lambda t=f"正在处理: {idx}/{total} - {Path(img_path).name}": 
-                                    self.progress_label.config(text=t))
-                    
-                    self.log_message(f"[{idx}/{total}] 处理: {Path(img_path).name}")
-                    
-                    # 检查文件是否存在
-                    if not Path(img_path).exists():
-                        self.log_message(f"  [跳过] 文件不存在: {img_path}")
-                        error_count += 1
-                        continue
-                    
-                    # OCR识别和情绪分析
-                    result = self.ocr_processor.process_image(Path(img_path))
-                    
-                    # 更新数据库
-                    self.db.update_image_data(
-                        image_id=img_id,
-                        ocr_text=result['ocr_text'],
-                        filtered_text=result['filtered_text'],
-                        emotion=result['emotion'],
-                        pos_score=result['emotion_positive'],
-                        neg_score=result['emotion_negative']
-                    )
-                    
-                    # 更新统计信息（调用回调函数）
-                    if self.stats_callback:
-                        try:
-                            self.frame.after(0, self.stats_callback)
-                        except Exception:
-                            pass
-                    
-                    # 日志输出
-                    if result['filtered_text']:
-                        self.log_message(f"  ✓ 识别文本: {result['filtered_text'][:50]}")
-                        self.log_message(f"  ✓ 情绪分类: {result['emotion']} (正:{result['emotion_positive']:.2f}, 负:{result['emotion_negative']:.2f})")
-                    else:
-                        self.log_message(f"  - 未识别到文本")
-                    
-                    processed_count += 1
-                    
-                except Exception as e:
-                    error_msg = f"处理图片失败 [{Path(img_path).name}]: {e}"
-                    self.log_message(f"  [错误] {error_msg}")
-                    logger.error(error_msg)
-                    import traceback
-                    logger.debug(traceback.format_exc())
-                    error_count += 1
-                    continue
-            
-            # 完成
-            self.processing = False
+            # 读取用户设置的线程数
             try:
-                self.db.set_app_state('processing_state', 'idle')
-            except Exception:
-                pass
+                max_workers = int(self.thread_spinbox.get())
+                max_workers = max(1, min(16, max_workers))  # 限制在1-16之间
+            except:
+                max_workers = self.max_workers
             
-            # 最后一次更新统计信息
-            if self.stats_callback:
-                try:
-                    self.frame.after(0, self.stats_callback)
-                except Exception:
-                    pass
+            use_multithread = self.multithread_var.get()
             
-            # 线程安全地更新UI
-            self.frame.after(0, lambda: self.progress_var.set(100))
-            self.frame.after(0, lambda: self.progress_label.config(
-                text=f"处理完成: 成功 {processed_count}, 失败 {error_count}"))
-            self.log_message("=" * 50)
-            self.log_message(f"[完成] 处理结束")
-            self.log_message(f"  成功: {processed_count} 张")
-            self.log_message(f"  失败: {error_count} 张")
-            self.log_message("=" * 50)
+            if use_multithread and max_workers > 1:
+                self.log_message(f"[INFO] 使用多线程模式，{max_workers} 个并行工作线程")
+                self.log_message(f"[INFO] 开始处理 {total} 张图片...")
+                self._process_images_multithread(unprocessed, max_workers)
+            else:
+                self.log_message(f"[INFO] 使用单线程模式")
+                self.log_message(f"[INFO] 开始处理 {total} 张图片...")
+                self._process_images_singlethread(unprocessed)
             
         except Exception as e:
             self.processing = False
@@ -285,6 +234,241 @@ class ProcessTab:
             traceback_str = traceback.format_exc()
             self.log_message(traceback_str)
             logger.debug(traceback_str)
+    
+    def _process_single_image(self, img_info):
+        """处理单张图片的工作函数"""
+        img_id = img_info['id']
+        img_path = img_info['file_path']
+        
+        try:
+            # 检查文件是否存在
+            if not Path(img_path).exists():
+                return {
+                    'success': False,
+                    'id': img_id,
+                    'path': img_path,
+                    'error': '文件不存在'
+                }
+            
+            # OCR识别和情绪分析
+            assert self.ocr_processor is not None, "OCR处理器未初始化"
+            result = self.ocr_processor.process_image(Path(img_path))
+            
+            # 更新数据库
+            self.db.update_image_data(
+                image_id=img_id,
+                ocr_text=result['ocr_text'],
+                filtered_text=result['filtered_text'],
+                emotion=result['emotion'],
+                pos_score=result['emotion_positive'],
+                neg_score=result['emotion_negative']
+            )
+            
+            return {
+                'success': True,
+                'id': img_id,
+                'path': img_path,
+                'result': result
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'id': img_id,
+                'path': img_path,
+                'error': str(e)
+            }
+    
+    def _process_images_multithread(self, unprocessed, max_workers):
+        """多线程处理图片"""
+        total = len(unprocessed)
+        processed_count = 0
+        error_count = 0
+        
+        # 用于跟踪任务提交和完成的计数器
+        import threading
+        progress_lock = threading.Lock()
+        
+        self.log_message("=" * 50)
+        self.log_message(f"多线程处理模式: {max_workers} 个工作线程")
+        self.log_message(f"待处理图片总数: {total}")
+        self.log_message("=" * 50)
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有任务
+            future_to_img = {
+                executor.submit(self._process_single_image, img_info): (idx, img_info)
+                for idx, img_info in enumerate(unprocessed, 1)
+            }
+            
+            self.log_message(f"已提交 {len(future_to_img)} 个处理任务到线程池")
+            
+            # 处理完成的任务
+            for future in as_completed(future_to_img):
+                if not self.processing:
+                    self.log_message("[暂停] 处理已暂停，取消剩余任务...")
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+                
+                idx, img_info = future_to_img[future]
+                img_path = img_info['file_path']
+                
+                try:
+                    task_result = future.result()
+                    
+                    # 线程安全地更新计数器
+                    with progress_lock:
+                        if task_result['success']:
+                            processed_count += 1
+                        else:
+                            error_count += 1
+                        completed = processed_count + error_count
+                    
+                    # 更新进度
+                    progress = (completed / total) * 100
+                    self.frame.after(0, lambda p=progress: self.progress_var.set(p))
+                    self.frame.after(0, lambda t=f"正在处理: {completed}/{total} (成功:{processed_count}, 失败:{error_count})": 
+                                    self.progress_label.config(text=t))
+                    
+                    if task_result['success']:
+                        result = task_result['result']
+                        
+                        # 日志输出
+                        filename = Path(img_path).name
+                        self.log_message(f"[{completed}/{total}] ✓ {filename}")
+                        if result['filtered_text']:
+                            preview = result['filtered_text'][:50]
+                            if len(result['filtered_text']) > 50:
+                                preview += "..."
+                            self.log_message(f"  文本: {preview}")
+                            self.log_message(f"  情绪: {result['emotion']} (正:{result['emotion_positive']:.2f}, 负:{result['emotion_negative']:.2f})")
+                        else:
+                            self.log_message(f"  未识别到文本")
+                    else:
+                        error = task_result.get('error', '未知错误')
+                        filename = Path(img_path).name
+                        self.log_message(f"[{completed}/{total}] ✗ {filename}")
+                        self.log_message(f"  错误: {error}")
+                    
+                    # 定期更新统计信息
+                    if completed % 5 == 0 and self.stats_callback:
+                        try:
+                            self.frame.after(0, self.stats_callback)
+                        except Exception:
+                            pass
+                    
+                    # 每处理10张图片输出一次进度摘要
+                    if completed % 10 == 0:
+                        self.log_message(f"--- 进度: {completed}/{total} ({progress:.1f}%) | 成功: {processed_count} | 失败: {error_count} ---")
+                    
+                except Exception as e:
+                    with progress_lock:
+                        error_count += 1
+                        completed = processed_count + error_count
+                    
+                    filename = Path(img_path).name
+                    self.log_message(f"[{completed}/{total}] ✗ {filename}")
+                    self.log_message(f"  异常: {str(e)}")
+                    logger.error(f"处理图片失败 [{filename}]: {e}")
+        
+        # 完成处理
+        self._finish_processing(processed_count, error_count)
+    
+    def _process_images_singlethread(self, unprocessed):
+        """单线程处理图片（原有逻辑）"""
+        total = len(unprocessed)
+        processed_count = 0
+        error_count = 0
+        
+        for idx, img_info in enumerate(unprocessed, 1):
+            if not self.processing:
+                self.log_message("[暂停] 处理已暂停")
+                break
+            
+            img_id = img_info['id']
+            img_path = img_info['file_path']
+            
+            try:
+                # 更新进度
+                progress = (idx / total) * 100
+                self.frame.after(0, lambda p=progress: self.progress_var.set(p))
+                self.frame.after(0, lambda t=f"正在处理: {idx}/{total} - {Path(img_path).name}": 
+                                self.progress_label.config(text=t))
+                
+                self.log_message(f"[{idx}/{total}] 处理: {Path(img_path).name}")
+                
+                # 检查文件是否存在
+                if not Path(img_path).exists():
+                    self.log_message(f"  [跳过] 文件不存在: {img_path}")
+                    error_count += 1
+                    continue
+                
+                # OCR识别和情绪分析
+                assert self.ocr_processor is not None, "OCR处理器未初始化"
+                result = self.ocr_processor.process_image(Path(img_path))
+                
+                # 更新数据库
+                self.db.update_image_data(
+                    image_id=img_id,
+                    ocr_text=result['ocr_text'],
+                    filtered_text=result['filtered_text'],
+                    emotion=result['emotion'],
+                    pos_score=result['emotion_positive'],
+                    neg_score=result['emotion_negative']
+                )
+                
+                # 更新统计信息
+                if self.stats_callback:
+                    try:
+                        self.frame.after(0, self.stats_callback)
+                    except Exception:
+                        pass
+                
+                # 日志输出
+                if result['filtered_text']:
+                    self.log_message(f"  ✓ 识别文本: {result['filtered_text'][:50]}")
+                    self.log_message(f"  ✓ 情绪分类: {result['emotion']} (正:{result['emotion_positive']:.2f}, 负:{result['emotion_negative']:.2f})")
+                else:
+                    self.log_message(f"  - 未识别到文本")
+                
+                processed_count += 1
+                
+            except Exception as e:
+                error_msg = f"处理图片失败 [{Path(img_path).name}]: {e}"
+                self.log_message(f"  [错误] {error_msg}")
+                logger.error(error_msg)
+                import traceback
+                logger.debug(traceback.format_exc())
+                error_count += 1
+                continue
+        
+        # 完成处理
+        self._finish_processing(processed_count, error_count)
+    
+    def _finish_processing(self, processed_count, error_count):
+        """完成处理的收尾工作"""
+        self.processing = False
+        try:
+            self.db.set_app_state('processing_state', 'idle')
+        except Exception:
+            pass
+        
+        # 最后一次更新统计信息
+        if self.stats_callback:
+            try:
+                self.frame.after(0, self.stats_callback)
+            except Exception:
+                pass
+        
+        # 更新UI
+        self.frame.after(0, lambda: self.progress_var.set(100))
+        self.frame.after(0, lambda: self.progress_label.config(
+            text=f"处理完成: 成功 {processed_count}, 失败 {error_count}"))
+        self.log_message("=" * 50)
+        self.log_message(f"[完成] 处理结束")
+        self.log_message(f"  成功: {processed_count} 张")
+        self.log_message(f"  失败: {error_count} 张")
+        self.log_message("=" * 50)
     
     def log_message(self, message: str):
         """添加日志消息（线程安全）"""

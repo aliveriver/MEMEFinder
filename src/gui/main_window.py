@@ -6,6 +6,8 @@
 
 import tkinter as tk
 from tkinter import ttk, messagebox
+from pathlib import Path
+import sys
 
 from .source_tab import SourceTab
 from .process_tab import ProcessTab
@@ -18,7 +20,8 @@ class MemeFinderGUI:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("表情包查找器 - MEMEFinder")
+        
+        self.root.title("MEMEFinder")
         self.root.geometry("1000x700")
         
         # 数据库
@@ -36,6 +39,9 @@ class MemeFinderGUI:
             self.check_resume()
         except Exception:
             pass
+        
+        # 在窗口完全创建后设置图标
+        self.root.after(50, self._set_window_icon)
     
     def create_widgets(self):
         """创建界面组件"""
@@ -64,6 +70,58 @@ class MemeFinderGUI:
     def update_status(self, message: str):
         """更新状态栏"""
         self.status_bar.config(text=message)
+    
+    def _set_window_icon(self):
+        """设置窗口图标"""
+        try:
+            project_root = Path(__file__).parent.parent.parent
+            icon_path = project_root / 'assets' / 'icon.ico'
+            
+            if icon_path.exists():
+                icon_str = str(icon_path.resolve())
+                
+                # 设置Tkinter图标
+                self.root.iconbitmap(default=icon_str)
+                self.root.iconbitmap(icon_str)
+                
+                # Windows任务栏图标需要通过API设置
+                if sys.platform == 'win32':
+                    self.root.after(200, lambda: self._set_taskbar_icon(icon_str))
+                return
+            
+        except Exception:
+            pass
+    
+    def _set_taskbar_icon(self, icon_path):
+        """设置Windows任务栏图标"""
+        try:
+            import ctypes
+            
+            # 确保窗口已经完全显示
+            self.root.update_idletasks()
+            
+            # 加载图标文件
+            hicon = ctypes.windll.user32.LoadImageW(
+                0,          # hinst (NULL表示从文件加载)
+                icon_path,  # 图标文件路径
+                1,          # IMAGE_ICON
+                0, 0,       # 使用默认大小
+                0x00000010 | 0x00008000  # LR_LOADFROMFILE | LR_DEFAULTSIZE
+            )
+            
+            if hicon:
+                # 获取窗口句柄
+                hwnd = self.root.winfo_id()
+                
+                # WM_SETICON = 0x0080
+                # ICON_SMALL = 0, ICON_BIG = 1
+                ctypes.windll.user32.SendMessageW(hwnd, 0x0080, 1, hicon)  # 任务栏大图标
+                ctypes.windll.user32.SendMessageW(hwnd, 0x0080, 0, hicon)  # 标题栏小图标
+                
+                # 强制刷新窗口
+                self.root.update()
+        except Exception:
+            pass
     
     def _on_tab_changed(self, event):
         """标签页切换事件处理"""

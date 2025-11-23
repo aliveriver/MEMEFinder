@@ -9,6 +9,16 @@ import sys
 import os
 from pathlib import Path
 
+# 设置Windows任务栏图标（必须在创建任何窗口之前）
+if sys.platform == 'win32':
+    try:
+        import ctypes
+        # 设置应用程序ID，这样Windows会使用我们的图标
+        myappid = 'aliveriver.memefinder.app.1.0'
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    except:
+        pass
+
 # 应用运行时补丁 - 必须在导入其他模块之前执行
 try:
     # 标准输出重定向补丁（避免打包后的控制台输出问题）

@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import ttk
 import threading
 import time
+import sys
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -247,10 +248,41 @@ class ModelLoadingWindow(LoadingWindow):
         """初始化模型加载窗口"""
         super().__init__(parent, title="MEMEFinder 初始化", message="正在准备表情包识别引擎...")
         
+        # 设置窗口图标
+        self._set_window_icon()
+        
         self.download_thread = None
         self.load_thread = None
         self.on_complete_callback = None
         self.on_error_callback = None
+    
+    def _set_window_icon(self):
+        """设置窗口图标"""
+        try:
+            # 获取项目根目录
+            project_root = Path(__file__).parent.parent.parent
+            
+            # 按优先级尝试加载图标
+            icon_paths = [
+                project_root / 'assets' / 'icon.ico',
+                project_root / 'assets' / 'icon.png',
+                project_root / 'img' / 'icon.ico',
+                project_root / 'img' / 'icon.png',
+            ]
+            
+            for icon_path in icon_paths:
+                if icon_path.exists():
+                    if icon_path.suffix.lower() == '.ico':
+                        self.window.iconbitmap(str(icon_path))
+                        return
+                    else:
+                        icon = tk.PhotoImage(file=str(icon_path))
+                        self.window.iconphoto(True, icon)
+                        # 保存引用防止被垃圾回收
+                        self.window._icon = icon
+                        return
+        except Exception:
+            pass
     
     def check_and_load_models(
         self,
