@@ -50,37 +50,52 @@ class ImageProcessor:
     def initialize_ocr(self):
         """初始化OCR处理器"""
         if self._ocr_initialized and self.ocr_processor:
+            self.log_message("[INFO] OCR 处理器已初始化,跳过重复初始化")
+            logger.info("OCR processor already initialized")
             return True
         
         if self.ocr_processor is None:
             try:
                 use_gpu = self.ui_vars['gpu_enabled_var'].get()
+                use_sentiment = self.ui_vars['enable_sentiment_var'].get()
                 mode_str = "GPU模式" if use_gpu else "CPU模式"
-                self.log_message(f"[INFO] 正在初始化 OCR 处理器 ({mode_str})...")
+                sentiment_str = "启用" if use_sentiment else "禁用"
+                
+                self.log_message(f"[INFO] 正在初始化 OCR 处理器...")
+                self.log_message(f"  - 运行模式: {mode_str}")
+                self.log_message(f"  - 情感分析: {sentiment_str}")
+                logger.info(f"Initializing OCR processor: GPU={use_gpu}, Sentiment={use_sentiment}")
                 
                 from ..utils.model_manager import get_model_manager
                 model_manager = get_model_manager()
                 model_dir = model_manager.get_model_dir()
                 
+                self.log_message(f"  - 模型目录: {model_dir}")
+                logger.info(f"Model directory: {model_dir}")
+                
                 self.ocr_processor = OCRProcessor(
                     use_gpu=use_gpu, 
                     model_dir=model_dir, 
                     lazy_load=True,
-                    use_senta=self.ui_vars['enable_sentiment_var'].get()
+                    use_senta=use_sentiment
                 )
                 self._ocr_initialized = True
-                self.log_message(f"[INFO] OCR 处理器初始化完成")
+                self.log_message(f"[INFO] ✓ OCR 处理器初始化完成")
+                logger.info("OCR processor initialized successfully")
                 return True
             except Exception as e:
                 error_msg = f"OCR 初始化失败: {e}"
                 self.log_message(f"[错误] {error_msg}")
                 logger.error(error_msg)
                 import traceback
-                logger.debug(traceback.format_exc())
+                traceback_str = traceback.format_exc()
+                logger.debug(traceback_str)
+                self.log_message(f"[错误] 详细信息已记录到日志文件")
                 return False
         else:
             self._ocr_initialized = True
             self.log_message("[INFO] 使用预加载的 OCR 处理器")
+            logger.info("Using pre-loaded OCR processor")
             return True
     
     def reset_ocr(self):
@@ -95,6 +110,8 @@ class ImageProcessor:
         
         try:
             if not Path(img_path).exists():
+                error_msg = f"文件不存在: {img_path}"
+                logger.warning(error_msg)
                 return {
                     'success': False,
                     'id': img_id,
@@ -106,6 +123,7 @@ class ImageProcessor:
             enable_sentiment = self.ui_vars['enable_sentiment_var'].get()
             
             if not enable_ocr:
+                logger.debug(f"OCR disabled, skipping image {img_id}")
                 self.db.update_image_data(
                     image_id=img_id,
                     ocr_text='',
@@ -129,15 +147,19 @@ class ImageProcessor:
             
             assert self.ocr_processor is not None, "OCR处理器未初始化"
             
+            logger.debug(f"Processing image {img_id}: {Path(img_path).name}")
+            
             if not enable_sentiment:
                 original_use_senta = self.ocr_processor._use_senta
                 self.ocr_processor._use_senta = False
                 try:
                     result = self.ocr_processor.process_image(Path(img_path))
+                    logger.debug(f"Image {img_id} processed (OCR only)")
                 finally:
                     self.ocr_processor._use_senta = original_use_senta
             else:
                 result = self.ocr_processor.process_image(Path(img_path))
+                logger.debug(f"Image {img_id} processed (OCR + Sentiment)")
             
             self.db.update_image_data(
                 image_id=img_id,
@@ -148,6 +170,8 @@ class ImageProcessor:
                 neg_score=result['emotion_negative']
             )
             
+            logger.debug(f"Image {img_id} data saved to database")
+            
             return {
                 'success': True,
                 'id': img_id,
@@ -156,6 +180,10 @@ class ImageProcessor:
             }
             
         except Exception as e:
+            error_msg = f"Error processing image {img_id} ({Path(img_path).name}): {e}"
+            logger.error(error_msg)
+            import traceback
+            logger.debug(traceback.format_exc())
             return {
                 'success': False,
                 'id': img_id,
@@ -176,6 +204,8 @@ class ImageProcessor:
         self.log_message(f"待处理图片总数: {total}")
         self.log_message("=" * 50)
         
+        logger.info(f"Starting multithread processing: {total} images with {max_workers} workers")
+        
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_img = {
                 executor.submit(self.process_single_image, img_info): (idx, img_info)
@@ -183,10 +213,12 @@ class ImageProcessor:
             }
             
             self.log_message(f"已提交 {len(future_to_img)} 个处理任务到线程池")
+            logger.info(f"Submitted {len(future_to_img)} tasks to thread pool")
             
             for future in as_completed(future_to_img):
                 if not self.processing:
                     self.log_message("[暂停] 处理已暂停，取消剩余任务...")
+                    logger.info("Processing paused, cancelling remaining tasks")
                     executor.shutdown(wait=False, cancel_futures=True)
                     break
                 
@@ -232,6 +264,7 @@ class ImageProcessor:
                     
                     if completed % 10 == 0:
                         self.log_message(f"--- 进度: {completed}/{total} ({progress:.1f}%) | 成功: {processed_count} | 失败: {error_count} ---")
+                        logger.info(f"Progress: {completed}/{total} ({progress:.1f}%) - Success: {processed_count}, Failed: {error_count}")
                     
                 except Exception as e:
                     with progress_lock:
@@ -243,6 +276,7 @@ class ImageProcessor:
                     self.log_message(f"  异常: {str(e)}")
                     logger.error(f"处理图片失败 [{filename}]: {e}")
         
+        logger.info(f"Multithread processing completed: {processed_count} successful, {error_count} failed")
         finish_callback(processed_count, error_count)
     
     def process_images_singlethread(self, unprocessed, finish_callback):
@@ -251,9 +285,12 @@ class ImageProcessor:
         processed_count = 0
         error_count = 0
         
+        logger.info(f"Starting singlethread processing: {total} images")
+        
         for idx, img_info in enumerate(unprocessed, 1):
             if not self.processing:
                 self.log_message("[暂停] 处理已暂停")
+                logger.info("Processing paused")
                 break
             
             img_id = img_info['id']
@@ -288,14 +325,19 @@ class ImageProcessor:
                 
                 if idx % 5 == 0:
                     self.ui_updaters['stats']()
+                
+                if idx % 10 == 0:
+                    logger.info(f"Singlethread progress: {idx}/{total} - Success: {processed_count}, Failed: {error_count}")
                     
             except Exception as e:
                 error_msg = f"处理图片失败 [{Path(img_path).name}]: {e}"
                 self.log_message(f"  [错误] {error_msg}")
                 logger.error(error_msg)
                 import traceback
-                logger.debug(traceback.format_exc())
+                traceback_str = traceback.format_exc()
+                logger.debug(traceback_str)
                 error_count += 1
                 continue
         
+        logger.info(f"Singlethread processing completed: {processed_count} successful, {error_count} failed")
         finish_callback(processed_count, error_count)

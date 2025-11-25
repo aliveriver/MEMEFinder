@@ -277,7 +277,7 @@ class ProcessTab:
         """添加日志消息(线程安全)"""
         def _log():
             timestamp = datetime.now().strftime("%H:%M:%S")
-            self.ui.log_text.insert(tk.END, f"[{timestamp}] {message}\\n")
+            self.ui.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
             self.ui.log_text.see(tk.END)
         
         try:

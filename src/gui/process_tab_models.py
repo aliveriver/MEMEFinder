@@ -7,6 +7,9 @@ ProcessTab 模型管理模块
 
 import threading
 from tkinter import messagebox
+from ..utils.logger import get_logger
+
+logger = get_logger()
 
 
 class ModelManager:
@@ -32,7 +35,9 @@ class ModelManager:
         
         # 检查是否已安装
         all_exists, missing = model_manager.check_ocr_models()
+        logger.info(f"OCR models check: all_exists={all_exists}, missing={missing}")
         if all_exists:
+            self.log_message("[INFO] OCR模型已存在，无需下载")
             messagebox.showinfo("提示", "OCR模型已存在，无需下载！")
             return
         
@@ -44,10 +49,14 @@ class ModelManager:
             "是否开始下载？")
         
         if not result:
+            self.log_message("[INFO] 用户取消了OCR模型下载")
+            logger.info("User cancelled OCR model download")
             return
         
         self.log_message("=" * 50)
         self.log_message("[下载] 开始下载OCR模型...")
+        self.log_message(f"[下载] 目标目录: {model_dir}")
+        logger.info(f"Starting OCR model download to {model_dir}")
         
         def download_progress(current, total, message):
             self.log_message(f"[下载] {message}")
@@ -56,14 +65,16 @@ class ModelManager:
         def download_thread():
             success = model_manager.download_ocr_models(download_progress)
             if success:
-                self.log_message("[成功] OCR模型下载完成！")
+                self.log_message("[成功] ✓ OCR模型下载完成！")
                 self.log_message("=" * 50)
+                logger.info("OCR models downloaded successfully")
                 messagebox.showinfo("成功", "OCR模型下载成功！\n可以启用OCR功能了。")
                 # 如果下载成功，自动启用OCR
                 self.ui_vars['enable_ocr_var'].set(True)
             else:
-                self.log_message("[失败] OCR模型下载失败")
+                self.log_message("[失败] ✗ OCR模型下载失败")
                 self.log_message("=" * 50)
+                logger.error("OCR model download failed")
                 messagebox.showerror("失败", 
                     "OCR模型下载失败！\n\n"
                     "可能的原因:\n"
@@ -80,11 +91,15 @@ class ModelManager:
         
         # 检查是否已安装
         installed, model_name = model_manager.check_sentiment_model()
+        logger.info(f"Sentiment model check: installed={installed}, model={model_name}")
         if installed:
+            self.log_message(f"[INFO] 情感分析模型已安装 ({model_name})")
             messagebox.showinfo("提示", f"情感分析模型已安装 ({model_name})！")
             return
         
+        self.log_message("=" * 50)
         self.log_message("[信息] 开始安装 SnowNLP...")
+        logger.info("Starting SnowNLP installation")
         
         def install_progress(current, total, message):
             self.log_message(f"[安装] {message}")
@@ -93,10 +108,14 @@ class ModelManager:
         def install_thread():
             success = model_manager.install_sentiment_model(install_progress)
             if success:
-                self.log_message("[成功] SnowNLP 安装成功！")
+                self.log_message("[成功] ✓ SnowNLP 安装成功！")
+                self.log_message("=" * 50)
+                logger.info("SnowNLP installed successfully")
                 messagebox.showinfo("成功", "SnowNLP 安装成功！")
             else:
-                self.log_message("[失败] SnowNLP 安装失败")
+                self.log_message("[失败] ✗ SnowNLP 安装失败")
+                self.log_message("=" * 50)
+                logger.error("SnowNLP installation failed")
                 messagebox.showerror("失败", "SnowNLP 安装失败，请查看日志")
         
         threading.Thread(target=install_thread, daemon=True).start()
@@ -108,6 +127,7 @@ class ModelManager:
         
         self.log_message("=" * 50)
         self.log_message("[状态检查] 正在检查模型状态...")
+        logger.info("Checking model status")
         
         # 检查OCR模型
         ocr_exists, ocr_missing = model_manager.check_ocr_models()
@@ -193,9 +213,11 @@ OCR模型: {'✅ 已安装' if ocr_exists else '❌ 未安装'}
                 self.ui_vars['enable_ocr_var'].set(False)
                 return
             
-            self.log_message("[信息] OCR功能已启用")
+            self.log_message("[信息] ✓ OCR功能已启用")
+            logger.info("OCR enabled")
         else:
             self.log_message("[信息] OCR功能已禁用")
+            logger.info("OCR disabled")
     
     def on_sentiment_toggle(self):
         """情感分析开关切换事件"""
@@ -217,6 +239,8 @@ OCR模型: {'✅ 已安装' if ocr_exists else '❌ 未安装'}
                     self.ui_vars['enable_sentiment_var'].set(False)
                 return
             
-            self.log_message(f"[信息] 情感分析功能已启用 (使用 {model_name})")
+            self.log_message(f"[信息] ✓ 情感分析功能已启用 (使用 {model_name})")
+            logger.info(f"Sentiment analysis enabled using {model_name}")
         else:
             self.log_message("[信息] 情感分析功能已禁用")
+            logger.info("Sentiment analysis disabled")
