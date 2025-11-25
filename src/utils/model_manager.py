@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 import urllib.request
 import threading
+import subprocess
 
 
 class ModelManager:
@@ -110,10 +111,52 @@ class ModelManager:
             
             # 获取rapidocr_onnxruntime的安装路径
             rapidocr_path = Path(rapidocr_onnxruntime.__file__).parent
-            source_model_dir = rapidocr_path / 'models'
             
-            if not source_model_dir.exists():
-                error_msg = f"未找到rapidocr_onnxruntime的models目录: {source_model_dir}"
+            # 尝试多个可能的models目录位置
+            possible_model_dirs = [
+                rapidocr_path / 'models',  # 标准位置（开发环境）
+            ]
+            
+            # 如果是打包环境，添加更多候选路径
+            if getattr(sys, 'frozen', False):
+                # PyInstaller打包后的环境
+                # sys._MEIPASS 是PyInstaller解压文件的临时目录
+                if hasattr(sys, '_MEIPASS'):
+                    meipass = Path(sys._MEIPASS)
+                    possible_model_dirs.extend([
+                        meipass / 'rapidocr_onnxruntime' / 'models',  # Hook收集的位置
+                        meipass / 'models',  # 备选位置
+                    ])
+                
+                # 应用程序执行路径
+                app_path = Path(sys.executable).parent
+                possible_model_dirs.extend([
+                    app_path / '_internal' / 'rapidocr_onnxruntime' / 'models',
+                    app_path / 'rapidocr_onnxruntime' / 'models',
+                    # 检查是否在_internal目录本身
+                    rapidocr_path / 'models',  # rapidocr_path在打包环境中指向_internal
+                ])
+            
+            # 找到第一个存在的models目录
+            source_model_dir = None
+            for candidate_dir in possible_model_dirs:
+                if candidate_dir.exists():
+                    source_model_dir = candidate_dir
+                    if progress_callback:
+                        progress_callback(0, len(missing), f"找到模型源目录: {candidate_dir}")
+                    break
+            
+            if source_model_dir is None:
+                # 提供详细的调试信息
+                debug_info = []
+                debug_info.append(f"未找到rapidocr_onnxruntime的models目录")
+                debug_info.append(f"rapidocr包路径: {rapidocr_path}")
+                debug_info.append(f"frozen状态: {getattr(sys, 'frozen', False)}")
+                if hasattr(sys, '_MEIPASS'):
+                    debug_info.append(f"_MEIPASS: {sys._MEIPASS}")
+                debug_info.append(f"尝试过的路径: {[str(d) for d in possible_model_dirs]}")
+                
+                error_msg = "\n".join(debug_info)
                 if progress_callback:
                     progress_callback(0, len(missing), error_msg)
                 return False
@@ -197,6 +240,80 @@ class ModelManager:
         except Exception as e:
             if progress_callback:
                 progress_callback(0, 1, f"安装失败: {str(e)}")
+            return False
+    
+    def check_gpu_support(self) -> Tuple[bool, str]:
+        """
+        检查是否已安装GPU支持
+        
+        Returns:
+            (是否支持GPU, 状态信息)
+        """
+        try:
+            import onnxruntime as ort
+            
+            # 检查可用的执行提供者
+            providers = ort.get_available_providers()
+            
+            if 'CUDAExecutionProvider' in providers:
+                return True, "已安装GPU支持 (onnxruntime-gpu)"
+            else:
+                # 检查是否是GPU版本但CUDA不可用
+                try:
+                    # 尝试获取版本信息
+                    version_info = ort.__version__
+                    return False, f"仅CPU支持 (onnxruntime {version_info})"
+                except:
+                    return False, "仅CPU支持"
+        except ImportError:
+            return False, "未安装onnxruntime"
+    
+    def install_gpu_support(self, progress_callback=None) -> bool:
+        """
+        安装GPU支持（替换为onnxruntime-gpu）
+        
+        Args:
+            progress_callback: 进度回调函数 callback(current, total, message)
+        
+        Returns:
+            是否安装成功
+        """
+        try:
+            if progress_callback:
+                progress_callback(0, 3, "正在检查当前onnxruntime版本...")
+            
+            # 首先卸载CPU版本
+            if progress_callback:
+                progress_callback(1, 3, "正在卸载onnxruntime (CPU版本)...")
+            
+            result = subprocess.run(
+                [sys.executable, '-m', 'pip', 'uninstall', 'onnxruntime', '-y'],
+                capture_output=True,
+                text=True
+            )
+            
+            # 安装GPU版本
+            if progress_callback:
+                progress_callback(2, 3, "正在安装onnxruntime-gpu (可能需要几分钟)...")
+            
+            result = subprocess.run(
+                [sys.executable, '-m', 'pip', 'install', 'onnxruntime-gpu'],
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0:
+                if progress_callback:
+                    progress_callback(3, 3, "GPU支持安装成功！")
+                return True
+            else:
+                if progress_callback:
+                    progress_callback(2, 3, f"安装失败: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            if progress_callback:
+                progress_callback(0, 3, f"安装失败: {str(e)}")
             return False
     
     def get_model_dir(self) -> Path:

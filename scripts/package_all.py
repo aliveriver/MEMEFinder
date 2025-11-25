@@ -16,6 +16,10 @@ import subprocess
 from pathlib import Path
 import time
 
+# 导入CUDA清理脚本
+sys.path.insert(0, str(Path(__file__).parent))
+from clean_cuda import clean_cuda_dlls
+
 # 确保在项目根目录运行
 PROJECT_ROOT = Path(__file__).parent.parent.absolute()
 os.chdir(PROJECT_ROOT)
@@ -55,7 +59,7 @@ def generate_spec(version_name, console=False):
     生成 Spec 文件内容
     version_name: 'cpu', 'gpu-cuda11', 'gpu-cuda12'
     """
-    app_name = f"MEMEFinder_{version_name}"
+    app_name = "MEMEFinder"  # 统一使用MEMEFinder作为应用名称
     
     # 基础 hidden imports
     hidden_imports = [
@@ -69,6 +73,7 @@ def generate_spec(version_name, console=False):
     # 基础数据文件
     datas = [
         ('src', 'src'),
+        ('assets', 'assets'),  # 打包 assets 目录（包含 icon.ico）
         ('README.md', '.'),
         ('LICENSE', '.'),
         # 模型将由用户按需下载，不打包到发布版本中
@@ -99,6 +104,7 @@ hiddenimports = {hidden_imports}
 try:
     tmp_ret = collect_all('rapidocr_onnxruntime')
     datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+    print(f\"[SPEC] 收集 RapidOCR: {{len(tmp_ret[0])}} 数据文件, {{len(tmp_ret[1])}} 二进制文件, {{len(tmp_ret[2])}} 隐藏导入\")
 except: pass
 
 # 收集 ONNX Runtime
@@ -247,7 +253,7 @@ def build_version(version_name):
     """构建指定版本"""
     print_color(f"\n[2/4] 正在构建版本: {version_name} ...", "green")
     
-    spec_filename = f"MEMEFinder_{version_name}.spec"
+    spec_filename = "MEMEFinder.spec"  # 统一使用MEMEFinder.spec
     
     # 1. 生成 Spec 文件
     print(f"  - 生成配置文件: {spec_filename}")
@@ -269,6 +275,12 @@ def build_version(version_name):
     try:
         subprocess.check_call(cmd)
         print_color(f"  ✓ {version_name} 打包成功!", "green")
+        
+        # 清理CUDA DLLs
+        dist_path = Path('releases') / "MEMEFinder"
+        if dist_path.exists():
+            clean_cuda_dlls(dist_path)
+        
         return True
     except subprocess.CalledProcessError:
         print_color(f"  ✗ {version_name} 打包失败!", "red")
@@ -278,7 +290,7 @@ def create_launcher(version_name, dist_dir):
     """创建启动脚本"""
     print(f"  - 创建启动脚本...")
     
-    exe_name = f"MEMEFinder_{version_name}.exe"
+    exe_name = "MEMEFinder.exe"  # 统一使用MEMEFinder.exe
     bat_path = dist_dir / "启动程序.bat"
     
     content = f"""@echo off
@@ -318,7 +330,7 @@ def main():
         
         if success:
             # 3. 后处理 (创建启动脚本等)
-            dist_path = Path('releases') / f"MEMEFinder_{ver}"
+            dist_path = Path('releases') / "MEMEFinder"
             if dist_path.exists():
                 create_launcher(ver, dist_path)
     

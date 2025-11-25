@@ -26,7 +26,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.logger import get_logger
 from utils.resource_monitor import get_resource_monitor
-from utils.gpu_detector import should_use_gpu, detect_gpu
+from utils.gpu_detector import should_use_gpu, detect_gpu, has_onnxruntime_gpu
 
 logger = get_logger()
 resource_monitor = get_resource_monitor()
@@ -102,25 +102,25 @@ class OCRProcessor:
         if use_gpu is None:
             has_gpu, gpu_info = detect_gpu()
             use_gpu = should_use_gpu()
-            if has_gpu:
+            if has_gpu and use_gpu:
                 logger.info(f"✓ 检测到GPU: {gpu_info}")
                 logger.info(f"  将使用GPU加速模式")
             else:
-                logger.info("✗ 未检测到GPU，将使用CPU模式")
-                if gpu_info and "不可用" in str(gpu_info):
-                    # GPU 硬件存在但初始化测试失败
-                    logger.warning(f"  原因: {gpu_info}")
-                    logger.info("  为了程序稳定性，已自动切换到CPU模式")
-                else:
-                    logger.info("  提示: 如需使用GPU，请确保已安装 onnxruntime-gpu")
+                logger.info("✗ 未检测到可用GPU或已禁用，将使用CPU模式")
         else:
             # 手动指定了GPU使用
             if use_gpu:
-                has_gpu, gpu_info = detect_gpu()
-                if has_gpu:
-                    logger.info(f"✓ 手动启用GPU模式: {gpu_info}")
+                # 严格检查是否真的支持GPU
+                if not has_onnxruntime_gpu():
+                    logger.warning("⚠ 请求使用GPU，但未检测到 onnxruntime-gpu 包")
+                    logger.warning("  自动回退到 CPU 模式")
+                    use_gpu = False
                 else:
-                    logger.warning("⚠ 手动启用了GPU，但系统可能不支持，将尝试使用GPU")
+                    has_gpu, gpu_info = detect_gpu()
+                    if has_gpu:
+                        logger.info(f"✓ 手动启用GPU模式: {gpu_info}")
+                    else:
+                        logger.warning("⚠ 手动启用了GPU，但未检测到硬件，尝试使用")
             else:
                 logger.info("手动禁用GPU，使用CPU模式")
         

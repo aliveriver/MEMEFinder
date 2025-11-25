@@ -259,28 +259,20 @@ class ModelLoadingWindow(LoadingWindow):
     def _set_window_icon(self):
         """设置窗口图标"""
         try:
-            # 获取项目根目录
-            project_root = Path(__file__).parent.parent.parent
+            from ..utils.resource_path import get_icon_path
             
-            # 按优先级尝试加载图标
-            icon_paths = [
-                project_root / 'assets' / 'icon.ico',
-                project_root / 'assets' / 'icon.png',
-                project_root / 'img' / 'icon.ico',
-                project_root / 'img' / 'icon.png',
-            ]
+            icon_path = get_icon_path()
             
-            for icon_path in icon_paths:
-                if icon_path.exists():
-                    if icon_path.suffix.lower() == '.ico':
-                        self.window.iconbitmap(str(icon_path))
-                        return
-                    else:
-                        icon = tk.PhotoImage(file=str(icon_path))
-                        self.window.iconphoto(True, icon)
-                        # 保存引用防止被垃圾回收
-                        self.window._icon = icon
-                        return
+            if icon_path and icon_path.exists():
+                if icon_path.suffix.lower() == '.ico':
+                    self.window.iconbitmap(str(icon_path))
+                else:
+                    # PNG 或其他格式
+                    icon = tk.PhotoImage(file=str(icon_path))
+                    self.window.iconphoto(True, icon)
+                    # 保存引用防止被垃圾回收
+                    self.window._icon = icon
+                    
         except Exception:
             pass
     

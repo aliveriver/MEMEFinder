@@ -46,10 +46,28 @@ python scripts/package_all.py
 
 ---
 
+## 🧹 清理脚本
+
+### `clean_cuda.py`
+清理打包后的 CUDA DLL 文件
+
+**功能：**
+- 从打包目录中删除 CUDA 相关的 DLL 文件
+- 减小打包体积，强制应用使用系统安装的 CUDA
+
+**使用方法：**
+```bash
+# 清理指定目录
+python scripts/clean_cuda.py releases/MEMEFinder
+```
+
+---
+
 ## 📂 项目结构
 
 ```
 scripts/
 ├── package_all.py          # GPU 版本打包脚本（核心）
+├── clean_cuda.py           # CUDA DLL 清理脚本
 └── README.md              # 本文件
 ```
