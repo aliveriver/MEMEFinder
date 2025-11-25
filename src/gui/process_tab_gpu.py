@@ -81,8 +81,6 @@ class GPUManager:
         else:
             # GPU可用且已配置CUDA DLL
             gpu_name = device_info.replace("CUDA GPU:", "").strip()
-            if len(gpu_name) > 20:
-                gpu_name = gpu_name[:18] + "..."
                 
             self.ui['gpu_status_label'].config(text=f"GPU: {gpu_name} ✨", foreground="#67C23A")  # 绿色
             self.ui['gpu_checkbox'].config(state="normal")
