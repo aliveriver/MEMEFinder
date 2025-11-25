@@ -9,6 +9,91 @@ import sys
 from typing import Tuple, Optional
 
 
+def has_nvidia_gpu() -> bool:
+    """
+    检测是否有NVIDIA GPU硬件（不检查onnxruntime-gpu）
+    
+    Returns:
+        bool: 是否有NVIDIA GPU硬件
+    """
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        return result.returncode == 0 and result.stdout.strip()
+    except:
+        return False
+
+
+def has_onnxruntime_gpu() -> bool:
+    """
+    检测是否安装了onnxruntime-gpu
+    
+    Returns:
+        bool: 是否安装onnxruntime-gpu
+    """
+    try:
+        import onnxruntime as ort
+        providers = ort.get_available_providers()
+        return 'CUDAExecutionProvider' in providers
+    except:
+        return False
+
+
+def get_gpu_recommendation() -> dict:
+    """
+    获取GPU使用建议
+    
+    Returns:
+        dict: {
+            'has_hardware': bool,  # 是否有NVIDIA硬件
+            'has_onnxruntime_gpu': bool,  # 是否安装onnxruntime-gpu
+            'can_use_gpu': bool,  # 是否可以使用GPU
+            'recommendation': str,  # 推荐操作
+            'device_info': str  # GPU设备信息
+        }
+    """
+    has_hw = has_nvidia_gpu()
+    has_ort_gpu = has_onnxruntime_gpu()
+    
+    result = {
+        'has_hardware': has_hw,
+        'has_onnxruntime_gpu': has_ort_gpu,
+        'can_use_gpu': has_hw and has_ort_gpu,
+        'recommendation': '',
+        'device_info': ''
+    }
+    
+    # 获取设备信息
+    if has_hw:
+        try:
+            import subprocess
+            gpu_result = subprocess.run(
+                ['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            if gpu_result.returncode == 0:
+                result['device_info'] = gpu_result.stdout.strip().split('\n')[0]
+        except:
+            result['device_info'] = 'NVIDIA GPU'
+    
+    # 生成建议
+    if has_hw and has_ort_gpu:
+        result['recommendation'] = '可以使用GPU加速'
+    elif has_hw and not has_ort_gpu:
+        result['recommendation'] = '建议安装onnxruntime-gpu以启用GPU加速'
+    else:
+        result['recommendation'] = 'GPU不可用，将使用CPU模式'
+    
+    return result
+
+
 def _test_cuda_availability_safe() -> bool:
     """
     安全地测试CUDA是否可用

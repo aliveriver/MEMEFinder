@@ -74,10 +74,11 @@ class MemeFinderGUI:
     def _set_window_icon(self):
         """设置窗口图标"""
         try:
-            project_root = Path(__file__).parent.parent.parent
-            icon_path = project_root / 'assets' / 'icon.ico'
+            from ..utils.resource_path import get_icon_path
             
-            if icon_path.exists():
+            icon_path = get_icon_path()
+            
+            if icon_path and icon_path.exists():
                 icon_str = str(icon_path.resolve())
                 
                 # 设置Tkinter图标

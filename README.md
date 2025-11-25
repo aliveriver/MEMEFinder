@@ -17,6 +17,8 @@
 | `main.py` | 程序入口（启动 GUI） |
 | `src/` | 源代码目录（含 `core/`, `gui/`, `utils/`） |
 | `scripts/` | 维护、打包和发布脚本 |
+| `hooks/` | PyInstaller 自定义 hooks（打包配置） |
+| `assets/` | 资源文件（应用图标等） |
 | `docs/` | 用户文档、使用指南 |
 | `models/` | 模型文件目录（运行时自动下载） |
 | `meme_finder.db` | SQLite 数据库文件（自动生成） |
@@ -96,18 +98,24 @@ python scripts/package_all.py
 ## 开发与项目结构
 
     src/
-    ├── core/            # 核心逻辑
-    │   ├── database.py  # 数据库管理
-    │   ├── scanner.py   # 文件扫描
-    │   ├── ocr_engine.py # OCR 引擎封装
+    ├── core/                # 核心逻辑
+    │   ├── database.py      # 数据库管理
+    │   ├── scanner.py       # 文件扫描
+    │   ├── ocr_engine.py    # OCR 引擎封装
     │   ├── emotion_analyzer.py # 情绪分析
-    │   └── ocr_processor.py  # OCR + 情绪分析处理流程
-    ├── gui/             # 图形界面
-    │   ├── main_window.py
-    │   ├── source_tab.py
-    │   ├── process_tab.py
-    │   └── search_tab.py
-    └── utils/           # 工具模块（日志与资源监控）
+    │   └── ocr_processor.py # OCR + 情绪分析处理流程
+    ├── gui/                 # 图形界面
+    │   ├── main_window.py   # 主窗口
+    │   ├── source_tab.py    # 图源管理页
+    │   ├── process_tab.py   # 图片处理页
+    │   ├── search_tab.py    # 图片搜索页
+    │   └── loading_window.py # 加载窗口
+    └── utils/               # 工具模块
+        ├── logger.py        # 日志记录
+        ├── resource_path.py # 资源路径管理
+        ├── model_manager.py # 模型管理
+        ├── gpu_detector.py  # GPU 检测
+        └── resource_monitor.py # 资源监控
 
 ---
 

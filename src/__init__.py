@@ -4,5 +4,5 @@
 MEMEFinder - 表情包查找器
 """
 
-__version__ = "1.0.0"
+__version__ = "2.1.0"
 __author__ = "MEMEFinder Team"
