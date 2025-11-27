@@ -574,6 +574,7 @@ class OCRProcessor:
         Returns:
             {"image": "...", "items": [{"box":[[x,y]x4], "text":"...", "score":0.xx}, ...]}
         """
+        feed_img = None
         try:
             # 创建外扩图片
             feed_img, (px, py), (orig_w, orig_h) = self._make_padded_tmp(
@@ -598,6 +599,14 @@ class OCRProcessor:
         except Exception as e:
             logger.error(f"OCR识别异常: {e}")
             return {"image": str(img_path), "items": []}
+        finally:
+            # 确保无论如何都释放feed_img
+            if feed_img is not None:
+                try:
+                    feed_img.close()
+                    del feed_img
+                except Exception:
+                    pass
 
     def _make_padded_tmp(self, img_path: Path, pad_ratio: float, pad_color=(0, 0, 0)) -> Tuple:
         """创建外扩的临时图片（与 ocr_cli.py 一致，优化内存使用）"""

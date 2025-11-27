@@ -55,7 +55,7 @@ class ProcessTab:
         }
         
         initial_values = {
-            'max_workers': 4,
+            'max_workers': 2,  # 降低默认线程数，减少CPU和内存压力
             'use_multithread': True
         }
         

@@ -4,6 +4,8 @@
 图片搜索标签页
 """
 
+import gc  # 添加垃圾回收模块
+
 import os
 import subprocess
 import sys
@@ -34,7 +36,8 @@ class SearchTab:
         # 虚拟化列表相关变量
         self.all_results = []  # 当前页的所有数据
         self.rendered_cells = {}  # {row_col_key: cell_widget} 已渲染的单元格
-        self.cell_height = 200  # 单个单元格的估计高度（将在渲染时动态调整）
+        self.cell_height = 200  # 单个单元格的估计高度
+        self.placeholder_item = None  # 占位符，用于设置滚动区域
         
         # 创建主框架
         self.frame = ttk.Frame(parent)
@@ -85,6 +88,9 @@ class SearchTab:
         # 内部容器，用于放置缩略图网格
         self.grid_frame = ttk.Frame(self.canvas)
         self.canvas.create_window((0, 0), window=self.grid_frame, anchor='nw')
+        
+        # 初始化占位符（用于虚拟化列表的滚动区域设置）
+        self.placeholder_item = None
 
         # 绑定滚动更新
         def _on_frame_config(event):
@@ -96,19 +102,14 @@ class SearchTab:
         self.thumb_padding = 20
         self.cols = 4  # 初始每行列数，会在加载时根据画布宽度调整
 
-        # 鼠标进入/离开画布时绑定滚轮事件，实现页面内滚动
-        self.canvas.bind('<Enter>', lambda e: self._bind_mousewheel(True))
-        self.canvas.bind('<Leave>', lambda e: self._bind_mousewheel(False))
+        # 滚轮事件绑定到整个result_frame，而不仅是Canvas
+        # 这样整个图片浏览区域都可以使用滚轮
+        result_frame.bind('<Enter>', lambda e: self._bind_mousewheel(True))
+        result_frame.bind('<Leave>', lambda e: self._bind_mousewheel(False))
         
         # 绑定滚动事件，用于虚拟化渲染
         self.canvas.bind('<Configure>', self._on_canvas_scroll)
         self.canvas.bind_all('<MouseWheel>', self._on_canvas_scroll, add='+')
-
-        # 移除画布大小变化时的延迟重绘，避免拖动滚动条时频繁重绘导致残影和高CPU占用
-        # 窗口尺寸调整后的重新布局将在缩略图大小改变时手动触发
-        # self.canvas.bind('<Configure>', lambda e: self._schedule_reload(250))
-
-        # 双击/单击不再依赖 Treeview，使用按钮直接打开图片
 
         # 分页控件
         pager_frame = ttk.Frame(self.frame)
@@ -177,6 +178,12 @@ class SearchTab:
         self.image_refs.clear()
         self.item_paths.clear()
         self.rendered_cells.clear()
+        
+        # 强制垃圾回收，释放旧页面的图片内存
+        gc.collect()
+        
+        # 重置GC累积计数器
+        self._removed_count = 0
 
         # 计算总页数
         total = self.db.get_images_count(processed=1, keyword=keyword, emotion=emotion)
@@ -198,15 +205,23 @@ class SearchTab:
         except Exception:
             self.cols = 4
 
-        # 计算grid_frame的总高度（用于设置滚动区域）
+        # 不要设置grid_frame的固定高度，会导致窗口无法拖动和拉伸
+        # 使用占位符方法设置滚动区域
         if self.all_results:
             total_rows = (len(self.all_results) + self.cols - 1) // self.cols
             thumb_side = int(self.thumb_size_var.get())
-            estimated_cell_height = thumb_side + 100  # 缩略图 + 文本 + padding
+            estimated_cell_height = thumb_side + 120
             total_height = total_rows * estimated_cell_height
             
-            # 设置grid_frame的最小高度，确保滚动区域正确
-            self.grid_frame.configure(height=total_height)
+            # 删除旧的占位符
+            if self.placeholder_item:
+                try:
+                    self.canvas.delete(self.placeholder_item)
+                except Exception:
+                    pass
+            
+            # 创建一个不可见的占位符，定位在底部，用于设置滚动区域
+            self.placeholder_item = self.canvas.create_line(0, total_height, 1, total_height, fill='')
 
         # 更新滚动区域
         self.canvas.update_idletasks()
@@ -339,7 +354,7 @@ class SearchTab:
             thumb_side = int(self.thumb_size_var.get())
             estimated_cell_height = thumb_side + 120  # 缩略图 + 文本 + padding（增加一些余量）
             
-            # 计算可见行范围（添加缓冲区，提前加载上下各2行，提升流畅度）
+            # 计算可见行范围（缓冲区恢复到2行，平衡内存和流畅度）
             cell_width = thumb_side + self.thumb_padding
             first_visible_row = max(0, int(canvas_top / estimated_cell_height) - 2)
             last_visible_row = int(canvas_bottom / estimated_cell_height) + 2
@@ -358,7 +373,7 @@ class SearchTab:
             except Exception:
                 pass
         
-        self._scroll_after_id = self.frame.after(100, self._render_visible_items)  # 增加延迟至100ms，降低触发频率
+        self._scroll_after_id = self.frame.after(200, self._render_visible_items)  # 增加延迟至200ms，进一步降低触发频率，减少残影
     
     def _render_visible_items(self):
         """根据可见区域渲染缩略图"""
@@ -391,8 +406,31 @@ class SearchTab:
                     del self.rendered_cells[key]
                 except Exception:
                     pass
+            # 主动释放图片引用
             if key in self.image_refs:
-                del self.image_refs[key]
+                try:
+                    # 删除ImageTk对象
+                    del self.image_refs[key]
+                except Exception:
+                    pass
+            if key in self.item_paths:
+                try:
+                    del self.item_paths[key]
+                except Exception:
+                    pass
+        
+        # 优化GC策略：使用累积计数而非每次都检查
+        # 只有累积删除超过10个项目时才触发GC，避免频繁GC造成卡顿
+        if len(to_remove) > 0:
+            # 累积删除计数
+            if not hasattr(self, '_removed_count'):
+                self._removed_count = 0
+            self._removed_count += len(to_remove)
+            
+            # 当累积删除超过10个项目时才GC
+            if self._removed_count >= 10:
+                gc.collect()
+                self._removed_count = 0
         
         # 渲染新的可见项目
         thumb_side = int(self.thumb_size_var.get())

@@ -5,6 +5,7 @@ ProcessTab 图片处理模块
 负责图片的OCR识别和情感分析处理
 """
 
+import gc
 import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -277,6 +278,19 @@ class ImageProcessor:
                     logger.error(f"处理图片失败 [{filename}]: {e}")
         
         logger.info(f"Multithread processing completed: {processed_count} successful, {error_count} failed")
+        
+        # 延迟垃圾回收，给Python时间自然释放对象
+        # 立即GC可能会影响性能，延迟5秒后再强制回收
+        def delayed_gc():
+            import time
+            time.sleep(5)
+            logger.info("开始延迟垃圾回收...")
+            gc.collect()
+            logger.info("内存清理完成")
+        
+        # 启动后台线程进行延迟GC
+        threading.Thread(target=delayed_gc, daemon=True).start()
+        
         finish_callback(processed_count, error_count)
     
     def process_images_singlethread(self, unprocessed, finish_callback):
@@ -340,4 +354,15 @@ class ImageProcessor:
                 continue
         
         logger.info(f"Singlethread processing completed: {processed_count} successful, {error_count} failed")
+        
+        # 延迟垃圾回收
+        def delayed_gc():
+            import time
+            time.sleep(5)
+            logger.info("开始延迟垃圾回收...")
+            gc.collect()
+            logger.info("内存清理完成")
+        
+        threading.Thread(target=delayed_gc, daemon=True).start()
+        
         finish_callback(processed_count, error_count)
