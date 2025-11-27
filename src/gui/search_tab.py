@@ -29,6 +29,12 @@ class SearchTab:
 
         # 延迟重绘调度ID（用于防抖）
         self._reload_after_id = None
+        self._scroll_after_id = None  # 滚动延迟调度ID
+        
+        # 虚拟化列表相关变量
+        self.all_results = []  # 当前页的所有数据
+        self.rendered_cells = {}  # {row_col_key: cell_widget} 已渲染的单元格
+        self.cell_height = 200  # 单个单元格的估计高度（将在渲染时动态调整）
         
         # 创建主框架
         self.frame = ttk.Frame(parent)
@@ -67,12 +73,14 @@ class SearchTab:
         result_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
         # 使用可滚动的 Canvas + 内部 Frame 来实现缩略图网格展示
-        self.canvas = tk.Canvas(result_frame)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        vsb = ttk.Scrollbar(result_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        # 先添加滚动条，再添加画布，确保滚动条不被覆盖
+        vsb = ttk.Scrollbar(result_frame, orient=tk.VERTICAL)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        self.canvas.configure(yscrollcommand=vsb.set)
+        
+        self.canvas = tk.Canvas(result_frame, yscrollcommand=vsb.set)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        vsb.configure(command=self.canvas.yview)
 
         # 内部容器，用于放置缩略图网格
         self.grid_frame = ttk.Frame(self.canvas)
@@ -91,9 +99,14 @@ class SearchTab:
         # 鼠标进入/离开画布时绑定滚轮事件，实现页面内滚动
         self.canvas.bind('<Enter>', lambda e: self._bind_mousewheel(True))
         self.canvas.bind('<Leave>', lambda e: self._bind_mousewheel(False))
+        
+        # 绑定滚动事件，用于虚拟化渲染
+        self.canvas.bind('<Configure>', self._on_canvas_scroll)
+        self.canvas.bind_all('<MouseWheel>', self._on_canvas_scroll, add='+')
 
-        # 画布大小变化时重新布局（延迟刷新避免频繁重绘）
-        self.canvas.bind('<Configure>', lambda e: self._schedule_reload(250))
+        # 移除画布大小变化时的延迟重绘，避免拖动滚动条时频繁重绘导致残影和高CPU占用
+        # 窗口尺寸调整后的重新布局将在缩略图大小改变时手动触发
+        # self.canvas.bind('<Configure>', lambda e: self._schedule_reload(250))
 
         # 双击/单击不再依赖 Treeview，使用按钮直接打开图片
 
@@ -142,7 +155,7 @@ class SearchTab:
         self.load_page()
 
     def load_page(self):
-        """加载当前页的数据并显示（网格缩略图）"""
+        """加载当前页的数据并显示（网格缩略图 - 使用虚拟化渲染）"""
         # 进入实际重绘前，取消任何已排队的调度（避免重复）
         if self._reload_after_id is not None:
             try:
@@ -156,13 +169,14 @@ class SearchTab:
         keyword = self.search_keyword.get().strip()
         emotion = self.search_emotion.get()
  
-        # 清空网格
+        # 清空网格和已渲染的单元格
         for child in self.grid_frame.winfo_children():
             child.destroy()
 
         # 清空引用映射
         self.image_refs.clear()
         self.item_paths.clear()
+        self.rendered_cells.clear()
 
         # 计算总页数
         total = self.db.get_images_count(processed=1, keyword=keyword, emotion=emotion)
@@ -171,8 +185,8 @@ class SearchTab:
             page = self.total_pages
             self.page_var.set(page)
 
-        # 获取这一页的数据
-        results = self.db.get_images_page(page=page, page_size=page_size, processed=1, keyword=keyword, emotion=emotion)
+        # 获取这一页的数据，保存到all_results
+        self.all_results = self.db.get_images_page(page=page, page_size=page_size, processed=1, keyword=keyword, emotion=emotion)
 
         # 根据画布宽度和缩略图尺寸动态计算每行列数
         try:
@@ -184,48 +198,24 @@ class SearchTab:
         except Exception:
             self.cols = 4
 
-        # 显示缩略图网格
-        r = c = 0
-        for idx, result in enumerate(results):
-            file_path = result.get('file_path') or ''
-            imgtk = None
-            try:
-                if file_path and os.path.exists(file_path):
-                    img = Image.open(file_path)
-                    img.thumbnail((thumb_side, thumb_side))
-                    imgtk = ImageTk.PhotoImage(img)
-            except Exception:
-                imgtk = None
+        # 计算grid_frame的总高度（用于设置滚动区域）
+        if self.all_results:
+            total_rows = (len(self.all_results) + self.cols - 1) // self.cols
+            thumb_side = int(self.thumb_size_var.get())
+            estimated_cell_height = thumb_side + 100  # 缩略图 + 文本 + padding
+            total_height = total_rows * estimated_cell_height
+            
+            # 设置grid_frame的最小高度，确保滚动区域正确
+            self.grid_frame.configure(height=total_height)
 
-            cell = ttk.Frame(self.grid_frame, relief=tk.FLAT, padding=5)
-            cell.grid(row=r, column=c, padx=5, pady=5, sticky='n')
-
-            if imgtk is not None:
-                btn = ttk.Button(cell, image=imgtk, command=lambda p=file_path: self.open_file(p))
-                btn.image = imgtk
-                btn.pack()
-                # 保留引用，避免被GC
-                self.image_refs[f"{r}_{c}"] = imgtk
-            else:
-                lbl = ttk.Label(cell, text='(无法加载)', width=16, anchor='center')
-                lbl.pack()
-
-            # 文本摘要
-            text = result['text'][:40] + '...' if result['text'] and len(result['text']) > 40 else (result['text'] or '(无文本)')
-            ttk.Label(cell, text=text, wraplength=thumb_side).pack()
-            ttk.Label(cell, text=result['emotion'] or '未分类').pack()
-
-            self.item_paths[f"{r}_{c}"] = file_path
-
-            c += 1
-            if c >= self.cols:
-                c = 0
-                r += 1
-
-        # 更新滚动区域并页码显示
+        # 更新滚动区域
         self.canvas.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox('all'))
         self.update_pager()
+        
+        # 触发虚拟化渲染，只渲染可见项
+        self._render_visible_items()
+
 
     def prev_page(self):
         p = max(1, self.page_var.get() - 1)
@@ -335,3 +325,118 @@ class SearchTab:
                     messagebox.showerror("错误", "无法找到系统打开命令，请手动打开图片")
         except Exception as e:
             messagebox.showerror("错误", f"无法打开图片: {e}")
+
+    # ========== 虚拟化列表相关方法 ==========
+    
+    def _get_visible_range(self):
+        """计算当前可见的行范围"""
+        try:
+            # 获取画布的可视区域
+            canvas_top = self.canvas.canvasy(0)  # 可视区域顶部的Y坐标
+            canvas_bottom = self.canvas.canvasy(self.canvas.winfo_height())  # 可视区域底部的Y坐标
+            
+            # 计算单元格高度（缩略图 + 文本 + padding）
+            thumb_side = int(self.thumb_size_var.get())
+            estimated_cell_height = thumb_side + 120  # 缩略图 + 文本 + padding（增加一些余量）
+            
+            # 计算可见行范围（添加缓冲区，提前加载上下各2行，提升流畅度）
+            cell_width = thumb_side + self.thumb_padding
+            first_visible_row = max(0, int(canvas_top / estimated_cell_height) - 2)
+            last_visible_row = int(canvas_bottom / estimated_cell_height) + 2
+            
+            return first_visible_row, last_visible_row, estimated_cell_height
+        except Exception:
+            # 出错时返回默认值
+            return 0, 10, 200
+    
+    def _on_canvas_scroll(self, event=None):
+        """画布滚动时的回调，触发虚拟化渲染"""
+        # 延迟渲染，避免滚动时频繁调用
+        if hasattr(self, '_scroll_after_id') and self._scroll_after_id:
+            try:
+                self.frame.after_cancel(self._scroll_after_id)
+            except Exception:
+                pass
+        
+        self._scroll_after_id = self.frame.after(100, self._render_visible_items)  # 增加延迟至100ms，降低触发频率
+    
+    def _render_visible_items(self):
+        """根据可见区域渲染缩略图"""
+        if not self.all_results:
+            return
+        
+        first_row, last_row, cell_height = self._get_visible_range()
+        
+        # 计算需要渲染的项目
+        items_to_render = set()
+        for idx in range(len(self.all_results)):
+            r = idx // self.cols
+            if first_row <= r <= last_row:
+                items_to_render.add(idx)
+        
+        # 移除不在可见范围内的项目（释放内存）
+        to_remove = []
+        for key in self.rendered_cells.keys():
+            try:
+                idx = int(key.split('_')[-1])  # 从key中提取索引
+                if idx not in items_to_render:
+                    to_remove.append(key)
+            except Exception:
+                pass
+        
+        for key in to_remove:
+            if key in self.rendered_cells:
+                try:
+                    self.rendered_cells[key].destroy()
+                    del self.rendered_cells[key]
+                except Exception:
+                    pass
+            if key in self.image_refs:
+                del self.image_refs[key]
+        
+        # 渲染新的可见项目
+        thumb_side = int(self.thumb_size_var.get())
+        for idx in items_to_render:
+            r = idx // self.cols
+            c = idx % self.cols
+            key = f"{r}_{c}_{idx}"
+            
+            # 如果已经渲染过，跳过
+            if key in self.rendered_cells:
+                continue
+            
+            result = self.all_results[idx]
+            file_path = result.get('file_path') or ''
+            
+            # 创建单元格
+            cell = ttk.Frame(self.grid_frame, relief=tk.FLAT, padding=5)
+            cell.grid(row=r, column=c, padx=5, pady=5, sticky='n')
+            self.rendered_cells[key] = cell
+            
+            # 加载缩略图
+            imgtk = None
+            try:
+                if file_path and os.path.exists(file_path):
+                    img = Image.open(file_path)
+                    img.thumbnail((thumb_side, thumb_side))
+                    imgtk = ImageTk.PhotoImage(img)
+            except Exception:
+                imgtk = None
+            
+            if imgtk is not None:
+                btn = ttk.Button(cell, image=imgtk)
+                # 修复lambda闭包问题，确保file_path绑定正确
+                btn.bind('<Double-Button-1>', lambda e, path=file_path: self.open_file(path))
+                btn.image = imgtk
+                btn.pack()
+                self.image_refs[key] = imgtk
+            else:
+                lbl = ttk.Label(cell, text='(无法加载)', width=16, anchor='center')
+                lbl.pack()
+            
+            # 文本摘要
+            text = result['text'][:40] + '...' if result['text'] and len(result['text']) > 40 else (result['text'] or '(无文本)')
+            ttk.Label(cell, text=text, wraplength=thumb_side).pack()
+            ttk.Label(cell, text=result['emotion'] or '未分类').pack()
+            
+            self.item_paths[key] = file_path
