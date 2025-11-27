@@ -102,14 +102,21 @@ class SearchTab:
         self.thumb_padding = 20
         self.cols = 4  # 初始每行列数，会在加载时根据画布宽度调整
 
-        # 滚轮事件绑定到整个result_frame，而不仅是Canvas
-        # 这样整个图片浏览区域都可以使用滚轮
-        result_frame.bind('<Enter>', lambda e: self._bind_mousewheel(True))
-        result_frame.bind('<Leave>', lambda e: self._bind_mousewheel(False))
+        # 直接在result_frame和canvas上绑定滚轮（永久绑定）
+        result_frame.bind('<MouseWheel>', self._on_mousewheel)
+        result_frame.bind('<Button-4>', self._on_mousewheel)
+        result_frame.bind('<Button-5>', self._on_mousewheel)
+        
+        self.canvas.bind('<MouseWheel>', self._on_mousewheel)
+        self.canvas.bind('<Button-4>', self._on_mousewheel)
+        self.canvas.bind('<Button-5>', self._on_mousewheel)
+        
+        self.grid_frame.bind('<MouseWheel>', self._on_mousewheel)
+        self.grid_frame.bind('<Button-4>', self._on_mousewheel)
+        self.grid_frame.bind('<Button-5>', self._on_mousewheel)
         
         # 绑定滚动事件，用于虚拟化渲染
         self.canvas.bind('<Configure>', self._on_canvas_scroll)
-        self.canvas.bind_all('<MouseWheel>', self._on_canvas_scroll, add='+')
 
         # 分页控件
         pager_frame = ttk.Frame(self.frame)
@@ -451,6 +458,11 @@ class SearchTab:
             cell.grid(row=r, column=c, padx=5, pady=5, sticky='n')
             self.rendered_cells[key] = cell
             
+            # 在cell上也绑定滚轮，确保点击空白处也能滚动
+            cell.bind('<MouseWheel>', self._on_mousewheel)
+            cell.bind('<Button-4>', self._on_mousewheel)
+            cell.bind('<Button-5>', self._on_mousewheel)
+            
             # 加载缩略图
             imgtk = None
             try:
@@ -468,13 +480,27 @@ class SearchTab:
                 btn.image = imgtk
                 btn.pack()
                 self.image_refs[key] = imgtk
+                
+                # 在按钮上绑定滚轮，确保鼠标在缩略图上也能滚动
+                btn.bind('<MouseWheel>', self._on_mousewheel)
+                btn.bind('<Button-4>', self._on_mousewheel)
+                btn.bind('<Button-5>', self._on_mousewheel)
             else:
                 lbl = ttk.Label(cell, text='(无法加载)', width=16, anchor='center')
                 lbl.pack()
             
-            # 文本摘要
+            # 文本摘要 - 创建Label并绑定滚轮
             text = result['text'][:40] + '...' if result['text'] and len(result['text']) > 40 else (result['text'] or '(无文本)')
-            ttk.Label(cell, text=text, wraplength=thumb_side).pack()
-            ttk.Label(cell, text=result['emotion'] or '未分类').pack()
+            text_lbl = ttk.Label(cell, text=text, wraplength=thumb_side)
+            text_lbl.pack()
+            text_lbl.bind('<MouseWheel>', self._on_mousewheel)
+            text_lbl.bind('<Button-4>', self._on_mousewheel)
+            text_lbl.bind('<Button-5>', self._on_mousewheel)
+            
+            emotion_lbl = ttk.Label(cell, text=result['emotion'] or '未分类')
+            emotion_lbl.pack()
+            emotion_lbl.bind('<MouseWheel>', self._on_mousewheel)
+            emotion_lbl.bind('<Button-4>', self._on_mousewheel)
+            emotion_lbl.bind('<Button-5>', self._on_mousewheel)
             
             self.item_paths[key] = file_path
