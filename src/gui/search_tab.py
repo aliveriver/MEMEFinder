@@ -52,8 +52,10 @@ class SearchTab:
         # 关键词搜索
         ttk.Label(search_frame, text="关键词:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.search_keyword = tk.StringVar()
-        ttk.Entry(search_frame, textvariable=self.search_keyword, width=40).grid(
-            row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        keyword_entry = ttk.Entry(search_frame, textvariable=self.search_keyword, width=40)
+        keyword_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        # 绑定回车键触发搜索
+        keyword_entry.bind('<Return>', lambda event: self.search_images())
         
         # 情绪筛选
         ttk.Label(search_frame, text="情绪:").grid(row=0, column=2, sticky=tk.W, padx=5, pady=5)
