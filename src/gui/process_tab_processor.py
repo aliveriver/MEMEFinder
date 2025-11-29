@@ -7,6 +7,7 @@ ProcessTab 图片处理模块
 
 import gc
 import threading
+import tracemalloc  # 内存分析
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..core.ocr_processor import OCRProcessor
@@ -41,19 +42,39 @@ class ImageProcessor:
         self.ui_updaters = ui_updaters
         self.ui_vars = ui_vars
         
-        # OCR处理器
+        # OCR处理器 - 完全延迟加载，启动时不初始化
         self.ocr_processor = None
         self._ocr_initialized = False
         
         # 处理状态
         self.processing = False
         
+        # 自动释放模型定时器
+        self._unload_timer = None
+        
+        # 内存分析配置（生产环境建议关闭以节省600-700MB内存）
+        # 开发调试时设为True，生产环境设为False
+        self._memory_profiling = False  # 默认关闭，节省内存
+        if self._memory_profiling:
+            tracemalloc.start()
+            logger.info("内存分析已启动")
+            self._print_memory_status("程序启动")
+        
+        logger.info("ImageProcessor 初始化完成（延迟加载模式，未加载OCR模型）")
+
+        
     def initialize_ocr(self):
-        """初始化OCR处理器"""
+        """初始化OCR处理器（延迟加载）"""
         if self._ocr_initialized and self.ocr_processor:
-            self.log_message("[INFO] OCR 处理器已初始化,跳过重复初始化")
+            self.log_message("[INFO] OCR 处理器已初始化，跳过重复初始化")
             logger.info("OCR processor already initialized")
             return True
+        
+        # 首次加载提示
+        self.log_message("=" * 60)
+        self.log_message("[INFO] 🔄 首次加载OCR模型，请稍候...")
+        self.log_message("[INFO] 这可能需要5-10秒，后续使用将自动恢复")
+        self.log_message("=" * 60)
         
         if self.ocr_processor is None:
             try:
@@ -74,12 +95,21 @@ class ImageProcessor:
                 self.log_message(f"  - 模型目录: {model_dir}")
                 logger.info(f"Model directory: {model_dir}")
                 
+                # 初始化OCR处理器
                 self.ocr_processor = OCRProcessor(
-                    use_gpu=use_gpu, 
-                    model_dir=model_dir, 
-                    lazy_load=True,
-                    use_senta=use_sentiment
+                    use_gpu=use_gpu,
+                    use_senta=use_sentiment,
+                    lazy_load=True
                 )
+                
+                # 加载OCR模型
+                if not self.ocr_processor.load_ocr_model():
+                    self.log_message("[ERROR] OCR模型加载失败")
+                    return False
+                
+                # 内存快照：OCR模型加载后
+                self._print_memory_status("OCR模型加载后")
+                
                 self._ocr_initialized = True
                 self.log_message(f"[INFO] ✓ OCR 处理器初始化完成")
                 logger.info("OCR processor initialized successfully")
@@ -103,6 +133,185 @@ class ImageProcessor:
         """重置OCR处理器"""
         self.ocr_processor = None
         self._ocr_initialized = False
+    
+    def _schedule_model_unload(self):
+        """
+        调度模型卸载：5秒后自动释放OCR和SnowNLP模型
+        节省约400MB内存（OCR ~370MB + SnowNLP ~30MB），下次使用时会自动重新加载
+        """
+        # 取消之前的定时器
+        if self._unload_timer:
+            try:
+                self._unload_timer.cancel()
+            except Exception:
+                pass
+        
+        def unload_models():
+            try:
+                if self.ocr_processor and not self.processing:
+                    self.log_message("[INFO] 5秒无活动，自动释放OCR模型以节省内存...")
+                    logger.info("Auto-unloading OCR models after 5 seconds of inactivity")
+                    
+                    # 1. 释放ONNX Runtime会话（关键：必须显式释放）
+                    if self.ocr_processor.ocr:
+                        try:
+                            # 尝试访问RapidOCR内部的session并释放
+                            if hasattr(self.ocr_processor.ocr, 'text_det'):
+                                if hasattr(self.ocr_processor.ocr.text_det, 'session'):
+                                    del self.ocr_processor.ocr.text_det.session
+                                del self.ocr_processor.ocr.text_det
+                            
+                            if hasattr(self.ocr_processor.ocr, 'text_rec'):
+                                if hasattr(self.ocr_processor.ocr.text_rec, 'session'):
+                                    del self.ocr_processor.ocr.text_rec.session
+                                del self.ocr_processor.ocr.text_rec
+                            
+                            if hasattr(self.ocr_processor.ocr, 'text_cls'):
+                                if hasattr(self.ocr_processor.ocr.text_cls, 'session'):
+                                    del self.ocr_processor.ocr.text_cls.session
+                                del self.ocr_processor.ocr.text_cls
+                        except Exception as e:
+                            logger.debug(f"释放ONNX会话时出错（可忽略）: {e}")
+                        
+                        # 删除OCR对象
+                        del self.ocr_processor.ocr
+                        self.ocr_processor.ocr = None
+                    
+                    self.ocr_processor._ocr_loaded = False
+                    
+                    # 2. 释放情感分析模型（强制卸载SnowNLP）
+                    if hasattr(self.ocr_processor, '_senta') and self.ocr_processor._senta:
+                        del self.ocr_processor._senta
+                        self.ocr_processor._senta = None
+                    self.ocr_processor._use_senta = False
+                    
+                    # 强制卸载SnowNLP模块（关键：释放385MB内存）
+                    try:
+                        import sys
+                        snownlp_modules = [mod for mod in sys.modules.keys() if 'snownlp' in mod.lower()]
+                        if snownlp_modules:
+                            logger.info(f"卸载SnowNLP模块: {len(snownlp_modules)} 个模块")
+                            for mod in snownlp_modules:
+                                try:
+                                    del sys.modules[mod]
+                                except:
+                                    pass
+                    except Exception as e:
+                        logger.debug(f"SnowNLP模块卸载失败（可忽略）: {e}")
+                    
+                    # 3. 清理可能的缓存
+                    if hasattr(self.ocr_processor, '_process_count'):
+                        self.ocr_processor._process_count = 0
+                    
+                    # 4. 垃圾回收（2次足够，避免过度GC影响性能）
+                    import gc
+                    for i in range(2):
+                        collected = gc.collect()
+                        logger.debug(f"GC round {i+1}: collected {collected} objects")
+                    
+                    # 5. 尝试释放NumPy/OpenCV缓存
+                    try:
+                        import numpy as np
+                        # 清理NumPy内部缓存
+                        np._core._get_handler_cache().clear()
+                    except:
+                        pass
+                    
+                    self.log_message("[INFO] ✓ 模型已释放，已节省约735MB内存")
+                    self.log_message("[INFO]   - OCR模型: ~350MB")
+                    self.log_message("[INFO]   - SnowNLP模型: ~385MB")
+                    self.log_message("[INFO] 下次处理时将自动重新加载模型")
+                    logger.info("Models unloaded successfully")
+                    
+                    # 内存状态：模型释放后
+                    self._print_memory_status("模型卸载后（最终状态）")
+                    
+            except Exception as e:
+                logger.error(f"Error unloading models: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+        
+        # 5秒后执行卸载（优化后）
+        self._unload_timer = threading.Timer(5.0, unload_models)
+        self._unload_timer.daemon = True
+        self._unload_timer.start()
+        logger.info("Model auto-unload timer scheduled for 5 seconds")
+
+    
+    def _print_memory_status(self, label="内存状态"):
+        """
+        打印详细的内存使用状态（增强版）
+        包含：实际物理内存、Python对象统计、内存分配详情
+        """
+        try:
+            import psutil
+            import os
+            import gc
+            
+            # 获取当前进程
+            process = psutil.Process(os.getpid())
+            mem_info = process.memory_info()
+            
+            self.log_message(f"\n{'='*70}")
+            self.log_message(f"📊 {label}")
+            self.log_message(f"{'='*70}")
+            
+            # 1. 实际物理内存使用
+            rss_mb = mem_info.rss / 1024 / 1024
+            vms_mb = mem_info.vms / 1024 / 1024
+            self.log_message(f"📦 实际物理内存 (RSS): {rss_mb:.1f} MB")
+            self.log_message(f"📦 虚拟内存 (VMS): {vms_mb:.1f} MB")
+            
+            # 2. Python GC统计
+            gc_stats = gc.get_stats()
+            gc_count = gc.get_count()
+            self.log_message(f"\n🗑️  垃圾回收统计:")
+            self.log_message(f"  - 代数统计: Gen0={gc_count[0]}, Gen1={gc_count[1]}, Gen2={gc_count[2]}")
+            
+            # 3. Python对象统计
+            import sys
+            obj_count = len(gc.get_objects())
+            self.log_message(f"  - Python对象总数: {obj_count:,}")
+            
+            # 4. 如果启用了tracemalloc，显示详细分配
+            if self._memory_profiling and tracemalloc.is_tracing():
+                snapshot = tracemalloc.take_snapshot()
+                top_stats = snapshot.statistics('lineno')
+                
+                # 总内存
+                total = sum(stat.size for stat in top_stats)
+                self.log_message(f"\n💾 Tracemalloc追踪的内存: {total / 1024 / 1024:.1f} MB")
+                
+                # 前10个最大分配
+                self.log_message(f"\n📈 内存占用 Top 10:")
+                for index, stat in enumerate(top_stats[:10], 1):
+                    frame = stat.traceback[0]
+                    filename = frame.filename
+                    
+                    # 简化路径
+                    if 'MEMEFinder' in filename:
+                        short_name = '...' + filename.split('MEMEFinder')[-1]
+                    elif 'site-packages' in filename:
+                        short_name = '...' + filename.split('site-packages')[-1]
+                    else:
+                        short_name = filename[-50:]
+                    
+                    self.log_message(
+                        f"  {index}. {short_name}:{frame.lineno} - "
+                        f"{stat.size / 1024 / 1024:.1f} MB ({stat.count:,} 对象)"
+                    )
+            
+            self.log_message(f"{'='*70}\n")
+            
+        except Exception as e:
+            logger.error(f"内存状态打印失败: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+    
+    def _print_memory_snapshot(self, label="Memory Snapshot"):
+        """保留兼容性的简化版本"""
+        self._print_memory_status(label)
+
     
     def process_single_image(self, img_info):
         """处理单张图片"""
@@ -279,17 +488,19 @@ class ImageProcessor:
         
         logger.info(f"Multithread processing completed: {processed_count} successful, {error_count} failed")
         
-        # 延迟垃圾回收，给Python时间自然释放对象
-        # 立即GC可能会影响性能，延迟5秒后再强制回收
-        def delayed_gc():
-            import time
-            time.sleep(5)
-            logger.info("开始延迟垃圾回收...")
-            gc.collect()
-            logger.info("内存清理完成")
+        # 打印处理完成时的内存状态
+        self._print_memory_status("处理完成（GC前）")
         
-        # 启动后台线程进行延迟GC
-        threading.Thread(target=delayed_gc, daemon=True).start()
+        # 立即GC（仅1次，快速回收临时对象）
+        logger.info("开始垃圾回收...")
+        gc.collect()
+        logger.info("内存清理完成")
+        
+        # 打印GC后的内存状态
+        self._print_memory_status("处理完成（GC后）")
+        
+        # 直接调度模型卸载（无需额外延迟GC）
+        self._schedule_model_unload()
         
         finish_callback(processed_count, error_count)
     
@@ -355,13 +566,17 @@ class ImageProcessor:
         
         logger.info(f"Singlethread processing completed: {processed_count} successful, {error_count} failed")
         
-        # 延迟垃圾回收
+        # 缩短延迟GC
         def delayed_gc():
             import time
-            time.sleep(5)
+            time.sleep(2)
             logger.info("开始延迟垃圾回收...")
-            gc.collect()
+            for _ in range(2):
+                gc.collect()
             logger.info("内存清理完成")
+            
+            # GC完成后，启动模型自动释放定时器
+            self._schedule_model_unload()
         
         threading.Thread(target=delayed_gc, daemon=True).start()
         

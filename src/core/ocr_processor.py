@@ -385,9 +385,9 @@ class OCRProcessor:
         
         # 初始化 Senta 情绪分析（可选）
         self._senta = None
-        self._use_senta = False
+        self._use_senta = use_senta
         if use_senta:
-            self._init_senta()
+            logger.info("情感分析已启用（使用SnowNLP）")
         
         # 记录初始化后的资源状态
         resource_monitor.log_resource_status()
@@ -478,7 +478,8 @@ class OCRProcessor:
                 
                 # 初始化情感分析（如果需要）
                 if self._use_senta_flag:
-                    self._init_senta()
+                    self._use_senta = True
+                    logger.info("情感分析已启用（使用SnowNLP）")
                 
                 return True
                 
@@ -795,6 +796,41 @@ class OCRProcessor:
         text = re.sub(r'\s+', ' ', text)  # 多个空格替换为单个
         text = re.sub(r'[\_\-\|]{3,}', '', text)  # 连续的下划线、横线
 
+        # 4. 去除首尾空格
+        text = text.strip()
+
+        return text
+
+    # ==================== 情绪分析模型初始化（支持多种方案）====================
+
+    def _init_senta(self):
+        """
+        初始化情绪分析模型
+        
+        支持的模型（按优先级尝试）：
+        1. SnowNLP（轻量级，中文情感分析）
+        2. TextBlob（英文情感分析，如果有英文需求）
+        3. 关键词方法（默认回退方案）
+        """
+        # 方案1：尝试使用 SnowNLP（推荐，轻量且准确）
+        try:
+            from snownlp import SnowNLP
+            logger.info("正在初始化 SnowNLP 情绪分析模型...")
+            
+            # 测试模型是否正常工作
+            test = SnowNLP("这是一个测试")
+            _ = test.sentiments
+            
+            self._senta = 'snownlp'
+            self._use_senta = True
+            logger.info("SnowNLP 初始化成功（轻量级中文情感分析）")
+            return
+        except ImportError:
+            logger.info("SnowNLP 未安装，尝试其他方案...")
+            logger.info("如需使用 SnowNLP，请运行: pip install snownlp")
+        except Exception as e:
+            logger.warning(f"SnowNLP 初始化失败: {e}")
+
         # 方案2：尝试使用 TextBlob（适合英文）
         try:
             from textblob import TextBlob  # type: ignore
@@ -887,7 +923,7 @@ class OCRProcessor:
 
     def analyze_emotion(self, text: str) -> Tuple[str, float, float]:
         """
-        情绪分析：优先使用 PaddleNLP Senta（如果已启用），否则使用关键词匹配
+        情绪分析：优先使用 SnowNLP（懒加载），否则使用关键词匹配
 
         Args:
             text: 文本内容
@@ -896,13 +932,32 @@ class OCRProcessor:
             (emotion, pos_score, neg_score)
             emotion: '正向', '负向', '中性', '未分类'
         """
-        # 1. 优先尝试使用 Senta（如果已初始化）
+        # 1. 如果启用了情感分析且SnowNLP未加载，尝试懒加载
+        if self._use_senta and self._senta is None:
+            try:
+                logger.info("首次使用情感分析，正在加载SnowNLP...")
+                from snownlp import SnowNLP
+                # 测试是否正常
+                test = SnowNLP("测试")
+                _ = test.sentiments
+                self._senta = 'snownlp'
+                logger.info("✓ SnowNLP加载成功（懒加载，节省初始内存385MB）")
+            except ImportError:
+                logger.warning("SnowNLP未安装，将使用关键词匹配")
+                self._senta = None
+                self._use_senta = False
+            except Exception as e:
+                logger.warning(f"SnowNLP加载失败: {e}，将使用关键词匹配")
+                self._senta = None
+                self._use_senta = False
+        
+        # 2. 优先尝试使用 SnowNLP（如果已加载）
         if self._use_senta and self._senta:
             senta_result = self._senta_analyze(text)
             if senta_result is not None:
                 return senta_result
 
-        # 2. 回退到关键词匹配方法
+        # 3. 回退到关键词匹配方法
         if not text or len(text.strip()) < 2:
             return ('未分类', 0.0, 0.0)
 

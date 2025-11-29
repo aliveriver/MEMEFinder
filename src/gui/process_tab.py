@@ -165,32 +165,40 @@ class ProcessTab:
             messagebox.showinfo("提示", "没有待处理的图片")
             return
         
-        # 检查模型状态并让用户确认
-        if not self._check_and_confirm_models():
-            return
+        # 在后台线程检查模型并显示确认对话框
+        def check_and_start():
+            # 检查模型状态
+            should_continue = self._check_and_confirm_models()
+            
+            if not should_continue:
+                return  # 用户取消或检查失败
+            
+            # 用户确认后，标记状态并启动处理
+            try:
+                self.db.set_app_state('processing_state', 'running')
+            except Exception:
+                pass
+             
+            self.processing = True
+            self.processor.processing = True
+            self.log_message("=" * 50)
+            self.log_message("开始处理图片...")
+            
+            # 如果OCR未初始化，提示用户后台加载中
+            if not self.processor._ocr_initialized:
+                self.log_message("[提示] 正在后台加载OCR模型，请稍候...")
+                self.log_message("[提示] 首次加载需要5-10秒，请耐心等待")
+            
+            self.log_message("=" * 50)
+            
+            # 启动处理线程
+            self.processing_thread = threading.Thread(target=self._process_images_thread)
+            self.processing_thread.daemon = True
+            self.processing_thread.start()
         
-        # 标记应用状态
-        try:
-            self.db.set_app_state('processing_state', 'running')
-        except Exception:
-            pass
-         
-        self.processing = True
-        self.processor.processing = True
-        self.log_message("=" * 50)
-        self.log_message("开始处理图片...")
-        
-        # 如果OCR未初始化，提示用户后台加载中
-        if not self.processor._ocr_initialized:
-            self.log_message("[提示] 正在后台加载OCR模型，请稍候...")
-            self.log_message("[提示] 首次加载需要5-10秒，请耐心等待")
-        
-        self.log_message("=" * 50)
-        
-        # 在单独线程中处理（OCR初始化也在线程中）
-        self.processing_thread = threading.Thread(target=self._process_images_thread)
-        self.processing_thread.daemon = True
-        self.processing_thread.start()
+        # 在后台线程中执行检查和确认
+        check_thread = threading.Thread(target=check_and_start, daemon=True)
+        check_thread.start()
     
     def _check_and_confirm_models(self):
         """
@@ -242,9 +250,15 @@ class ProcessTab:
                 messagebox.showerror("模型检查失败", message)
                 return False
             
-            # 显示确认对话框
-            total_images = len(self.db.get_unprocessed_images(limit=10000))
-            message = f"准备处理 {total_images} 张图片\n\n当前模型状态:\n\n"
+            # 显示确认对话框  
+            # 快速检查是否有待处理图片（limit=1避免慢查询）
+            has_unprocessed = len(self.db.get_unprocessed_images(limit=1)) > 0
+            
+            if not has_unprocessed:
+                messagebox.showinfo("提示", "没有待处理的图片")
+                return False
+            
+            message = f"准备开始处理图片\n\n当前模型状态:\n\n"
             message += "\n".join(warnings)
             message += "\n\n是否开始处理？"
             

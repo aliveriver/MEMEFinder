@@ -183,13 +183,33 @@ class SearchTab:
         for child in self.grid_frame.winfo_children():
             child.destroy()
 
-        # 清空引用映射
+        # 强制清空所有引用（彻底释放内存）
+        for key in list(self.image_refs.keys()):
+            try:
+                del self.image_refs[key]
+            except:
+                pass
         self.image_refs.clear()
+        
+        for key in list(self.item_paths.keys()):
+            try:
+                del self.item_paths[key]
+            except:
+                pass
         self.item_paths.clear()
+        
+        for key in list(self.rendered_cells.keys()):
+            try:
+                del self.rendered_cells[key]
+            except:
+                pass
         self.rendered_cells.clear()
         
-        # 强制垃圾回收，释放旧页面的图片内存
-        gc.collect()
+        # 强制垃圾回收（两次确保彻底），在空闲时执行避免阻塞
+        def delayed_gc():
+            gc.collect()
+            gc.collect()
+        self.frame.after(50, delayed_gc)
         
         # 重置GC累积计数器
         self._removed_count = 0
@@ -385,7 +405,7 @@ class SearchTab:
         self._scroll_after_id = self.frame.after(200, self._render_visible_items)  # 增加延迟至200ms，进一步降低触发频率，减少残影
     
     def _render_visible_items(self):
-        """根据可见区域渲染缩略图"""
+        """根据可见区域渲染缩略图（优化内存版本）"""
         if not self.all_results:
             return
         
@@ -428,21 +448,41 @@ class SearchTab:
                 except Exception:
                     pass
         
-        # 优化GC策略：使用累积计数而非每次都检查
-        # 只有累积删除超过10个项目时才触发GC，避免频繁GC造成卡顿
+        # LRU缓存：限制最大缓存数量为50
+        MAX_CACHE_SIZE = 50
+        if len(self.image_refs) > MAX_CACHE_SIZE:
+            # 删除最旧的缓存（简单实现：删除前10个）
+            oldest_keys = list(self.image_refs.keys())[:10]
+            for key in oldest_keys:
+                try:
+                    del self.image_refs[key]
+                    if key in self.item_paths:
+                        del self.item_paths[key]
+                except Exception:
+                    pass
+        
+        # 优化GC策略：只在非关键路径进行GC
+        # 只有累积删除超过10个项目时才GC，并且使用after延迟执行
         if len(to_remove) > 0:
             # 累积删除计数
             if not hasattr(self, '_removed_count'):
                 self._removed_count = 0
             self._removed_count += len(to_remove)
             
-            # 当累积删除超过10个项目时才GC
+            # 当累积删除超过10个项目时才GC，并在空闲时执行
             if self._removed_count >= 10:
-                gc.collect()
+                # 使用after在空闲时执行GC，避免阻塞UI
+                def delayed_gc():
+                    import gc
+                    gc.collect()
+                self.frame.after(100, delayed_gc)  # 100ms后执行
                 self._removed_count = 0
         
         # 渲染新的可见项目
-        thumb_side = int(self.thumb_size_var.get())
+        # 限制缩略图最大尺寸为150px
+        MAX_THUMB_SIZE = 150
+        thumb_side = min(int(self.thumb_size_var.get()), MAX_THUMB_SIZE)
+        
         for idx in items_to_render:
             r = idx // self.cols
             c = idx % self.cols
@@ -465,14 +505,50 @@ class SearchTab:
             cell.bind('<Button-4>', self._on_mousewheel)
             cell.bind('<Button-5>', self._on_mousewheel)
             
-            # 加载缩略图
+            # 加载缩略图（优化内存版本）
             imgtk = None
             try:
                 if file_path and os.path.exists(file_path):
+                    import io
+                    
+                    # 打开图片
                     img = Image.open(file_path)
-                    img.thumbnail((thumb_side, thumb_side))
-                    imgtk = ImageTk.PhotoImage(img)
-            except Exception:
+                    
+                    # 缩略图
+                    img.thumbnail((thumb_side, thumb_side), Image.Resampling.NEAREST)
+                    
+                    # 转换为RGB（JPEG不支持透明度）
+                    if img.mode in ('RGBA', 'LA', 'P'):
+                        # 创建白色背景
+                        background = Image.new('RGB', img.size, (255, 255, 255))
+                        if img.mode == 'P':
+                            img = img.convert('RGBA')
+                        background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+                        img.close()
+                        img = background
+                    elif img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    
+                    # JPEG压缩（quality=60，显著减少内存）
+                    buffer = io.BytesIO()
+                    img.save(buffer, format='JPEG', quality=60, optimize=True)
+                    buffer.seek(0)
+                    
+                    # 立即关闭原图
+                    img.close()
+                    del img
+                    
+                    # 从压缩后的buffer加载
+                    compressed_img = Image.open(buffer)
+                    imgtk = ImageTk.PhotoImage(compressed_img)
+                    
+                    # 关闭压缩后的图片
+                    compressed_img.close()
+                    del compressed_img
+                    buffer.close()
+                    del buffer
+                    
+            except Exception as e:
                 imgtk = None
             
             if imgtk is not None:
