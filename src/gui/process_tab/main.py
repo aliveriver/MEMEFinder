@@ -5,6 +5,7 @@
 使用模块化设计,将功能拆分为多个独立模块
 """
 
+import gc
 import tkinter as tk
 import threading
 from datetime import datetime
@@ -32,6 +33,8 @@ class ProcessTab:
         
         # 处理状态
         self.processing = False
+        self.paused = False  # 暂停状态
+        self.stop_requested = False  # 停止请求标志
         self.processing_thread = None
         
         # 创建主框架
@@ -151,9 +154,40 @@ class ProcessTab:
     def _configure_cuda_path(self):
         self.gpu_manager.configure_cuda_path()
     
+    def _unload_snownlp_if_imported(self):
+        """卸载可能已导入的snownlp模块以释放内存"""
+        try:
+            import sys
+            snownlp_modules = [mod for mod in list(sys.modules.keys()) if 'snownlp' in mod.lower()]
+            if snownlp_modules:
+                self.log_message(f"[清理] 检测到{len(snownlp_modules)}个SnowNLP模块，正在卸载...")
+                for mod in snownlp_modules:
+                    try:
+                        del sys.modules[mod]
+                    except:
+                        pass
+                # 强制垃圾回收
+                collected = gc.collect()
+                logger.info(f"Unloaded {len(snownlp_modules)} SnowNLP modules, collected {collected} objects")
+                self.log_message(f"[清理] SnowNLP模块已卸载，释放了{collected}个对象")
+        except Exception as e:
+            logger.debug(f"Failed to unload SnowNLP: {e}")
+    
     # 处理控制方法
     def start_processing(self):
         """开始处理图片"""
+        # 如果正在处理但是暂停了，则继续处理
+        if self.processing and self.paused:
+            self.log_message("[继续] 继续处理图片...")
+            self.paused = False
+            self.processor.paused = False
+            try:
+                self.db.set_app_state('processing_state', 'running')
+            except Exception:
+                pass
+            return
+        
+        # 如果正在处理且没有暂停，提示用户
         if self.processing:
             from tkinter import messagebox
             messagebox.showinfo("提示", "正在处理中...")
@@ -167,11 +201,19 @@ class ProcessTab:
         
         # 在后台线程检查模型并显示确认对话框
         def check_and_start():
-            # 检查模型状态
+            # 检查模型状态并让用户确认
             should_continue = self._check_and_confirm_models()
             
             if not should_continue:
-                return  # 用户取消或检查失败
+                self.log_message("[取消] 用户取消了处理操作")
+                # 用户取消，检查是否有已加载的模型需要卸载
+                if self.processor.ocr_processor and not self.processing:
+                    self.log_message("[取消] 检测到已加载的模型，5秒后将自动卸载以释放内存")
+                    self.processor._schedule_model_unload()
+                
+                # 卸载可能已导入的snownlp模块(在check_sentiment_model时可能导入)
+                self._unload_snownlp_if_imported()
+                return
             
             # 用户确认后，标记状态并启动处理
             try:
@@ -180,7 +222,11 @@ class ProcessTab:
                 pass
              
             self.processing = True
+            self.paused = False
+            self.stop_requested = False
             self.processor.processing = True
+            self.processor.paused = False
+            self.processor.stop_requested = False
             self.log_message("=" * 50)
             self.log_message("开始处理图片...")
             
@@ -286,26 +332,40 @@ class ProcessTab:
             return result
     
     def pause_processing(self):
-        """暂停处理"""
-        if self.processing:
-            self.processing = False
-            self.processor.processing = False
-            self.log_message("[暂停] 处理已暂停")
+        """暂停处理（保留模型和状态）"""
+        if self.processing and not self.paused:
+            self.paused = True
+            self.processor.paused = True
+            self.log_message("[暂停] 处理已暂停，点击开始处理可继续")
+            
+            # 更新UI，告知用户已暂停
+            self.frame.after(0, lambda: self.ui.progress_label.config(
+                text="处理已暂停，点击'开始处理'继续"))
+            
             try:
                 self.db.set_app_state('processing_state', 'paused')
             except Exception:
                 pass
      
     def stop_processing(self):
-        """停止处理"""
+        """停止处理（完全终止并清理资源）"""
         if self.processing:
             self.processing = False
+            self.paused = False
+            self.stop_requested = True
             self.processor.processing = False
-            self.log_message("[停止] 处理已停止")
+            self.processor.paused = False
+            self.processor.stop_requested = True
+            self.log_message("[停止] 正在停止处理...")
             try:
                 self.db.set_app_state('processing_state', 'idle')
             except Exception:
                 pass
+            
+            # 调度模型卸载（5秒后自动执行）
+            if self.processor.ocr_processor:
+                self.processor._schedule_model_unload()
+                self.log_message("[停止] 已停止，5秒后将自动卸载模型释放内存")
     
     def _process_images_thread(self):
         """处理图片的线程"""
@@ -327,6 +387,8 @@ class ProcessTab:
                         self.db.set_app_state('processing_state', 'idle')
                     except Exception:
                         pass
+                    # 调度模型卸载，清理可能已加载的资源
+                    self.processor._schedule_model_unload()
                     return
                 
                 # 初始化完成，更新UI
@@ -372,15 +434,45 @@ class ProcessTab:
             # traceback详情只记录到日志文件
             logger.debug(traceback_str)
             self.log_message("[错误] 详细错误信息已记录到日志文件")
+            
+            # 异常后也调度模型卸载
+            if self.processor.ocr_processor:
+                self.processor._schedule_model_unload()
     
     def _finish_processing(self, processed_count, error_count):
         """完成处理的收尾工作"""
-        self.processing = False
-        self.processor.processing = False
-        try:
-            self.db.set_app_state('processing_state', 'idle')
-        except Exception:
-            pass
+        # 如果是暂停状态，保持processing=True以便继续
+        if not self.paused:
+            self.processing = False
+            self.processor.processing = False
+            self.stop_requested = False
+            self.processor.stop_requested = False
+            try:
+                self.db.set_app_state('processing_state', 'idle')
+            except Exception:
+                pass
+            
+            # 调度模型卸载（5秒后自动执行）
+            if self.processor.ocr_processor:
+                self.processor._schedule_model_unload()
+        else:
+            # 暂停状态，保持状态（不卸载模型，不启动倒计时）
+            try:
+                self.db.set_app_state('processing_state', 'paused')
+            except Exception:
+                pass
+            
+            # 更新UI，告知用户已暂停
+            self.frame.after(0, lambda: self.ui.progress_label.config(
+                text=f"处理已暂停 (已处理: {processed_count}, 失败: {error_count}), 点击'开始处理'继续"))
+            
+            self.log_message("=" * 50)
+            self.log_message(f"[暂停] 处理已暂停")
+            self.log_message(f"  已处理: {processed_count} 张")
+            self.log_message(f"  失败: {error_count} 张")
+            self.log_message(f"  模型保持加载，点击'开始处理'可继续")
+            self.log_message("=" * 50)
+            return  # 暂停状态下，不执行后面的完成逻辑
         
         # 清理数据库缓存
         try:
