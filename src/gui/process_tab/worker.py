@@ -10,7 +10,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_gpu, db_path, max_workers, progress_queue=None):
+def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_gpu, db_path, max_workers, progress_queue=None, control_queue=None):
     """
     在单个子进程中使用多线程处理多张图片
     
@@ -28,6 +28,7 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
         db_path: 数据库路径
         max_workers: 子进程内的线程数
         progress_queue: 进度队列，用于实时更新UI
+        control_queue: 控制队列，用于接收暂停/停止信号
     
     Returns:
         处理结果列表
@@ -44,6 +45,8 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
     ocr_processor = None
     db = None  # 共享数据库实例
     db_lock = threading.Lock()  # 数据库操作锁
+    should_stop = threading.Event()  # 停止信号
+    is_paused = threading.Event()  # 暂停信号
     
     try:
         # 初始化共享数据库连接（只创建一次）
@@ -70,6 +73,19 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
         
         # 定义线程工作函数
         def process_one_image(img_info, index):
+            # 检查停止信号
+            if should_stop.is_set():
+                return None
+            
+            # 检查暂停信号
+            while is_paused.is_set() and not should_stop.is_set():
+                import time
+                time.sleep(0.1)
+            
+            # 再次检查停止信号
+            if should_stop.is_set():
+                return None
+            
             img_id = img_info['id']
             img_path = img_info['file_path']
             
@@ -166,13 +182,42 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
         
         # 使用线程池并行处理
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 启动控制队列监听线程
+            def monitor_control_queue():
+                if not control_queue:
+                    return
+                while True:
+                    try:
+                        if not control_queue.empty():
+                            command = control_queue.get_nowait()
+                            if command == 'pause':
+                                is_paused.set()
+                            elif command == 'resume':
+                                is_paused.clear()
+                            elif command == 'stop':
+                                should_stop.set()
+                                break
+                    except:
+                        pass
+                    import time
+                    time.sleep(0.1)
+            
+            if control_queue:
+                control_thread = threading.Thread(target=monitor_control_queue, daemon=True)
+                control_thread.start()
+            
             futures = {executor.submit(process_one_image, img, idx): idx 
                       for idx, img in enumerate(image_list, 1)}
             
             for future in as_completed(futures):
+                # 检查停止信号
+                if should_stop.is_set():
+                    break
+                    
                 try:
                     result = future.result()
-                    results.append(result)
+                    if result is not None:  # None表示任务被取消
+                        results.append(result)
                 except Exception as e:
                     import traceback
                     results.append({

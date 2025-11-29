@@ -49,6 +49,8 @@ class ImageProcessor:
         
         # 处理状态
         self.processing = False
+        self.paused = False  # 暂停状态
+        self.stop_requested = False  # 停止请求标志
         
         # 自动释放模型定时器
         self._unload_timer = None
@@ -333,9 +335,10 @@ class ImageProcessor:
         use_gpu = self.ui_vars['gpu_enabled_var'].get()
         db_path = self.db.db_path if hasattr(self.db, 'db_path') else 'meme_finder.db'
         
-        # 创建进度队列用于实时更新
+        # 创建进度队列和控制队列用于实时更新
         manager = Manager()
         progress_queue = manager.Queue()
+        control_queue = manager.Queue()  # 用于发送暂停/停止命令
         
         # 使用单个子进程处理所有图片（内部使用多线程）
         with ProcessPoolExecutor(max_workers=1) as executor:
@@ -347,7 +350,8 @@ class ImageProcessor:
                 use_gpu,
                 db_path,
                 max_workers,
-                progress_queue
+                progress_queue,
+                control_queue  # 传递控制队列
             )
             
             self.log_message(f"已启动子进程，内部使用 {max_workers} 个线程处理...")
@@ -355,11 +359,33 @@ class ImageProcessor:
             
             # 实时监听进度更新
             try:
+                last_paused_state = False
+                last_stop_state = False
+                
                 while not future.done():
-                    if not self.processing:
-                        self.log_message("[暂停] 正在终止子进程...")
+                    # 检查暂停状态变化
+                    if self.paused != last_paused_state:
+                        if self.paused:
+                            self.log_message("[暂停] 发送暂停信号到子进程...")
+                            control_queue.put('pause')
+                        else:
+                            self.log_message("[继续] 发送继续信号到子进程...")
+                            control_queue.put('resume')
+                        last_paused_state = self.paused
+                    
+                    # 检查停止状态变化
+                    if (self.stop_requested or not self.processing) and not last_stop_state:
+                        self.log_message("[停止] 发送停止信号到子进程...")
+                        control_queue.put('stop')
+                        last_stop_state = True
+                        time.sleep(0.5)
                         executor.shutdown(wait=False, cancel_futures=True)
                         break
+                    
+                    # 如果处于暂停状态，只等待不处理进度
+                    if self.paused:
+                        time.sleep(0.2)
+                        continue
                     
                     # 检查进度队列
                     try:
@@ -473,9 +499,15 @@ class ImageProcessor:
         logger.info(f"Starting singlethread processing: {total} images")
         
         for idx, img_info in enumerate(unprocessed, 1):
-            if not self.processing:
-                self.log_message("[暂停] 处理已暂停")
-                logger.info("Processing paused")
+            # 检查暂停状态
+            while self.paused and self.processing:
+                import time
+                time.sleep(0.5)
+            
+            # 检查停止状态
+            if self.stop_requested or not self.processing:
+                self.log_message("[停止] 处理已停止")
+                logger.info("Processing stopped")
                 break
             
             img_id = img_info['id']
