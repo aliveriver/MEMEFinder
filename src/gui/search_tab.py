@@ -4,6 +4,8 @@
 图片搜索标签页
 """
 
+import gc  # 添加垃圾回收模块
+
 import os
 import subprocess
 import sys
@@ -29,6 +31,13 @@ class SearchTab:
 
         # 延迟重绘调度ID（用于防抖）
         self._reload_after_id = None
+        self._scroll_after_id = None  # 滚动延迟调度ID
+        
+        # 虚拟化列表相关变量
+        self.all_results = []  # 当前页的所有数据
+        self.rendered_cells = {}  # {row_col_key: cell_widget} 已渲染的单元格
+        self.cell_height = 200  # 单个单元格的估计高度
+        self.placeholder_item = None  # 占位符，用于设置滚动区域
         
         # 创建主框架
         self.frame = ttk.Frame(parent)
@@ -43,8 +52,10 @@ class SearchTab:
         # 关键词搜索
         ttk.Label(search_frame, text="关键词:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.search_keyword = tk.StringVar()
-        ttk.Entry(search_frame, textvariable=self.search_keyword, width=40).grid(
-            row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        keyword_entry = ttk.Entry(search_frame, textvariable=self.search_keyword, width=40)
+        keyword_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        # 绑定回车键触发搜索
+        keyword_entry.bind('<Return>', lambda event: self.search_images())
         
         # 情绪筛选
         ttk.Label(search_frame, text="情绪:").grid(row=0, column=2, sticky=tk.W, padx=5, pady=5)
@@ -67,16 +78,21 @@ class SearchTab:
         result_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
         # 使用可滚动的 Canvas + 内部 Frame 来实现缩略图网格展示
-        self.canvas = tk.Canvas(result_frame)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        vsb = ttk.Scrollbar(result_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        # 先添加滚动条，再添加画布，确保滚动条不被覆盖
+        vsb = ttk.Scrollbar(result_frame, orient=tk.VERTICAL)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        self.canvas.configure(yscrollcommand=vsb.set)
+        
+        self.canvas = tk.Canvas(result_frame, yscrollcommand=vsb.set)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        vsb.configure(command=self.canvas.yview)
 
         # 内部容器，用于放置缩略图网格
         self.grid_frame = ttk.Frame(self.canvas)
         self.canvas.create_window((0, 0), window=self.grid_frame, anchor='nw')
+        
+        # 初始化占位符（用于虚拟化列表的滚动区域设置）
+        self.placeholder_item = None
 
         # 绑定滚动更新
         def _on_frame_config(event):
@@ -88,14 +104,21 @@ class SearchTab:
         self.thumb_padding = 20
         self.cols = 4  # 初始每行列数，会在加载时根据画布宽度调整
 
-        # 鼠标进入/离开画布时绑定滚轮事件，实现页面内滚动
-        self.canvas.bind('<Enter>', lambda e: self._bind_mousewheel(True))
-        self.canvas.bind('<Leave>', lambda e: self._bind_mousewheel(False))
-
-        # 画布大小变化时重新布局（延迟刷新避免频繁重绘）
-        self.canvas.bind('<Configure>', lambda e: self._schedule_reload(250))
-
-        # 双击/单击不再依赖 Treeview，使用按钮直接打开图片
+        # 直接在result_frame和canvas上绑定滚轮（永久绑定）
+        result_frame.bind('<MouseWheel>', self._on_mousewheel)
+        result_frame.bind('<Button-4>', self._on_mousewheel)
+        result_frame.bind('<Button-5>', self._on_mousewheel)
+        
+        self.canvas.bind('<MouseWheel>', self._on_mousewheel)
+        self.canvas.bind('<Button-4>', self._on_mousewheel)
+        self.canvas.bind('<Button-5>', self._on_mousewheel)
+        
+        self.grid_frame.bind('<MouseWheel>', self._on_mousewheel)
+        self.grid_frame.bind('<Button-4>', self._on_mousewheel)
+        self.grid_frame.bind('<Button-5>', self._on_mousewheel)
+        
+        # 绑定滚动事件，用于虚拟化渲染
+        self.canvas.bind('<Configure>', self._on_canvas_scroll)
 
         # 分页控件
         pager_frame = ttk.Frame(self.frame)
@@ -142,7 +165,7 @@ class SearchTab:
         self.load_page()
 
     def load_page(self):
-        """加载当前页的数据并显示（网格缩略图）"""
+        """加载当前页的数据并显示（网格缩略图 - 使用虚拟化渲染）"""
         # 进入实际重绘前，取消任何已排队的调度（避免重复）
         if self._reload_after_id is not None:
             try:
@@ -156,13 +179,40 @@ class SearchTab:
         keyword = self.search_keyword.get().strip()
         emotion = self.search_emotion.get()
  
-        # 清空网格
+        # 清空网格和已渲染的单元格
         for child in self.grid_frame.winfo_children():
             child.destroy()
 
-        # 清空引用映射
+        # 强制清空所有引用（彻底释放内存）
+        for key in list(self.image_refs.keys()):
+            try:
+                del self.image_refs[key]
+            except:
+                pass
         self.image_refs.clear()
+        
+        for key in list(self.item_paths.keys()):
+            try:
+                del self.item_paths[key]
+            except:
+                pass
         self.item_paths.clear()
+        
+        for key in list(self.rendered_cells.keys()):
+            try:
+                del self.rendered_cells[key]
+            except:
+                pass
+        self.rendered_cells.clear()
+        
+        # 强制垃圾回收（两次确保彻底），在空闲时执行避免阻塞
+        def delayed_gc():
+            gc.collect()
+            gc.collect()
+        self.frame.after(50, delayed_gc)
+        
+        # 重置GC累积计数器
+        self._removed_count = 0
 
         # 计算总页数
         total = self.db.get_images_count(processed=1, keyword=keyword, emotion=emotion)
@@ -171,8 +221,8 @@ class SearchTab:
             page = self.total_pages
             self.page_var.set(page)
 
-        # 获取这一页的数据
-        results = self.db.get_images_page(page=page, page_size=page_size, processed=1, keyword=keyword, emotion=emotion)
+        # 获取这一页的数据，保存到all_results
+        self.all_results = self.db.get_images_page(page=page, page_size=page_size, processed=1, keyword=keyword, emotion=emotion)
 
         # 根据画布宽度和缩略图尺寸动态计算每行列数
         try:
@@ -184,48 +234,32 @@ class SearchTab:
         except Exception:
             self.cols = 4
 
-        # 显示缩略图网格
-        r = c = 0
-        for idx, result in enumerate(results):
-            file_path = result.get('file_path') or ''
-            imgtk = None
-            try:
-                if file_path and os.path.exists(file_path):
-                    img = Image.open(file_path)
-                    img.thumbnail((thumb_side, thumb_side))
-                    imgtk = ImageTk.PhotoImage(img)
-            except Exception:
-                imgtk = None
+        # 不要设置grid_frame的固定高度，会导致窗口无法拖动和拉伸
+        # 使用占位符方法设置滚动区域
+        if self.all_results:
+            total_rows = (len(self.all_results) + self.cols - 1) // self.cols
+            thumb_side = int(self.thumb_size_var.get())
+            estimated_cell_height = thumb_side + 120
+            total_height = total_rows * estimated_cell_height
+            
+            # 删除旧的占位符
+            if self.placeholder_item:
+                try:
+                    self.canvas.delete(self.placeholder_item)
+                except Exception:
+                    pass
+            
+            # 创建一个不可见的占位符，定位在底部，用于设置滚动区域
+            self.placeholder_item = self.canvas.create_line(0, total_height, 1, total_height, fill='')
 
-            cell = ttk.Frame(self.grid_frame, relief=tk.FLAT, padding=5)
-            cell.grid(row=r, column=c, padx=5, pady=5, sticky='n')
-
-            if imgtk is not None:
-                btn = ttk.Button(cell, image=imgtk, command=lambda p=file_path: self.open_file(p))
-                btn.image = imgtk
-                btn.pack()
-                # 保留引用，避免被GC
-                self.image_refs[f"{r}_{c}"] = imgtk
-            else:
-                lbl = ttk.Label(cell, text='(无法加载)', width=16, anchor='center')
-                lbl.pack()
-
-            # 文本摘要
-            text = result['text'][:40] + '...' if result['text'] and len(result['text']) > 40 else (result['text'] or '(无文本)')
-            ttk.Label(cell, text=text, wraplength=thumb_side).pack()
-            ttk.Label(cell, text=result['emotion'] or '未分类').pack()
-
-            self.item_paths[f"{r}_{c}"] = file_path
-
-            c += 1
-            if c >= self.cols:
-                c = 0
-                r += 1
-
-        # 更新滚动区域并页码显示
+        # 更新滚动区域
         self.canvas.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox('all'))
         self.update_pager()
+        
+        # 触发虚拟化渲染，只渲染可见项
+        self._render_visible_items()
+
 
     def prev_page(self):
         p = max(1, self.page_var.get() - 1)
@@ -335,3 +369,216 @@ class SearchTab:
                     messagebox.showerror("错误", "无法找到系统打开命令，请手动打开图片")
         except Exception as e:
             messagebox.showerror("错误", f"无法打开图片: {e}")
+
+    # ========== 虚拟化列表相关方法 ==========
+    
+    def _get_visible_range(self):
+        """计算当前可见的行范围"""
+        try:
+            # 获取画布的可视区域
+            canvas_top = self.canvas.canvasy(0)  # 可视区域顶部的Y坐标
+            canvas_bottom = self.canvas.canvasy(self.canvas.winfo_height())  # 可视区域底部的Y坐标
+            
+            # 计算单元格高度（缩略图 + 文本 + padding）
+            thumb_side = int(self.thumb_size_var.get())
+            estimated_cell_height = thumb_side + 120  # 缩略图 + 文本 + padding（增加一些余量）
+            
+            # 计算可见行范围（缓冲区恢复到2行，平衡内存和流畅度）
+            cell_width = thumb_side + self.thumb_padding
+            first_visible_row = max(0, int(canvas_top / estimated_cell_height) - 2)
+            last_visible_row = int(canvas_bottom / estimated_cell_height) + 2
+            
+            return first_visible_row, last_visible_row, estimated_cell_height
+        except Exception:
+            # 出错时返回默认值
+            return 0, 10, 200
+    
+    def _on_canvas_scroll(self, event=None):
+        """画布滚动时的回调，触发虚拟化渲染"""
+        # 延迟渲染，避免滚动时频繁调用
+        if hasattr(self, '_scroll_after_id') and self._scroll_after_id:
+            try:
+                self.frame.after_cancel(self._scroll_after_id)
+            except Exception:
+                pass
+        
+        self._scroll_after_id = self.frame.after(200, self._render_visible_items)  # 增加延迟至200ms，进一步降低触发频率，减少残影
+    
+    def _render_visible_items(self):
+        """根据可见区域渲染缩略图（优化内存版本）"""
+        if not self.all_results:
+            return
+        
+        first_row, last_row, cell_height = self._get_visible_range()
+        
+        # 计算需要渲染的项目
+        items_to_render = set()
+        for idx in range(len(self.all_results)):
+            r = idx // self.cols
+            if first_row <= r <= last_row:
+                items_to_render.add(idx)
+        
+        # 移除不在可见范围内的项目（释放内存）
+        to_remove = []
+        for key in self.rendered_cells.keys():
+            try:
+                idx = int(key.split('_')[-1])  # 从key中提取索引
+                if idx not in items_to_render:
+                    to_remove.append(key)
+            except Exception:
+                pass
+        
+        for key in to_remove:
+            if key in self.rendered_cells:
+                try:
+                    self.rendered_cells[key].destroy()
+                    del self.rendered_cells[key]
+                except Exception:
+                    pass
+            # 主动释放图片引用
+            if key in self.image_refs:
+                try:
+                    # 删除ImageTk对象
+                    del self.image_refs[key]
+                except Exception:
+                    pass
+            if key in self.item_paths:
+                try:
+                    del self.item_paths[key]
+                except Exception:
+                    pass
+        
+        # LRU缓存：限制最大缓存数量为50
+        MAX_CACHE_SIZE = 50
+        if len(self.image_refs) > MAX_CACHE_SIZE:
+            # 删除最旧的缓存（简单实现：删除前10个）
+            oldest_keys = list(self.image_refs.keys())[:10]
+            for key in oldest_keys:
+                try:
+                    del self.image_refs[key]
+                    if key in self.item_paths:
+                        del self.item_paths[key]
+                except Exception:
+                    pass
+        
+        # 优化GC策略：只在非关键路径进行GC
+        # 只有累积删除超过10个项目时才GC，并且使用after延迟执行
+        if len(to_remove) > 0:
+            # 累积删除计数
+            if not hasattr(self, '_removed_count'):
+                self._removed_count = 0
+            self._removed_count += len(to_remove)
+            
+            # 当累积删除超过10个项目时才GC，并在空闲时执行
+            if self._removed_count >= 10:
+                # 使用after在空闲时执行GC，避免阻塞UI
+                def delayed_gc():
+                    import gc
+                    gc.collect()
+                self.frame.after(100, delayed_gc)  # 100ms后执行
+                self._removed_count = 0
+        
+        # 渲染新的可见项目
+        # 限制缩略图最大尺寸为150px
+        MAX_THUMB_SIZE = 150
+        thumb_side = min(int(self.thumb_size_var.get()), MAX_THUMB_SIZE)
+        
+        for idx in items_to_render:
+            r = idx // self.cols
+            c = idx % self.cols
+            key = f"{r}_{c}_{idx}"
+            
+            # 如果已经渲染过，跳过
+            if key in self.rendered_cells:
+                continue
+            
+            result = self.all_results[idx]
+            file_path = result.get('file_path') or ''
+            
+            # 创建单元格
+            cell = ttk.Frame(self.grid_frame, relief=tk.FLAT, padding=5)
+            cell.grid(row=r, column=c, padx=5, pady=5, sticky='n')
+            self.rendered_cells[key] = cell
+            
+            # 在cell上也绑定滚轮，确保点击空白处也能滚动
+            cell.bind('<MouseWheel>', self._on_mousewheel)
+            cell.bind('<Button-4>', self._on_mousewheel)
+            cell.bind('<Button-5>', self._on_mousewheel)
+            
+            # 加载缩略图（优化内存版本）
+            imgtk = None
+            try:
+                if file_path and os.path.exists(file_path):
+                    import io
+                    
+                    # 打开图片
+                    img = Image.open(file_path)
+                    
+                    # 缩略图
+                    img.thumbnail((thumb_side, thumb_side), Image.Resampling.NEAREST)
+                    
+                    # 转换为RGB（JPEG不支持透明度）
+                    if img.mode in ('RGBA', 'LA', 'P'):
+                        # 创建白色背景
+                        background = Image.new('RGB', img.size, (255, 255, 255))
+                        if img.mode == 'P':
+                            img = img.convert('RGBA')
+                        background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+                        img.close()
+                        img = background
+                    elif img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    
+                    # JPEG压缩（quality=60，显著减少内存）
+                    buffer = io.BytesIO()
+                    img.save(buffer, format='JPEG', quality=60, optimize=True)
+                    buffer.seek(0)
+                    
+                    # 立即关闭原图
+                    img.close()
+                    del img
+                    
+                    # 从压缩后的buffer加载
+                    compressed_img = Image.open(buffer)
+                    imgtk = ImageTk.PhotoImage(compressed_img)
+                    
+                    # 关闭压缩后的图片
+                    compressed_img.close()
+                    del compressed_img
+                    buffer.close()
+                    del buffer
+                    
+            except Exception as e:
+                imgtk = None
+            
+            if imgtk is not None:
+                btn = ttk.Button(cell, image=imgtk)
+                # 修复lambda闭包问题，确保file_path绑定正确
+                btn.bind('<Double-Button-1>', lambda e, path=file_path: self.open_file(path))
+                btn.image = imgtk
+                btn.pack()
+                self.image_refs[key] = imgtk
+                
+                # 在按钮上绑定滚轮，确保鼠标在缩略图上也能滚动
+                btn.bind('<MouseWheel>', self._on_mousewheel)
+                btn.bind('<Button-4>', self._on_mousewheel)
+                btn.bind('<Button-5>', self._on_mousewheel)
+            else:
+                lbl = ttk.Label(cell, text='(无法加载)', width=16, anchor='center')
+                lbl.pack()
+            
+            # 文本摘要 - 创建Label并绑定滚轮
+            text = result['text'][:40] + '...' if result['text'] and len(result['text']) > 40 else (result['text'] or '(无文本)')
+            text_lbl = ttk.Label(cell, text=text, wraplength=thumb_side)
+            text_lbl.pack()
+            text_lbl.bind('<MouseWheel>', self._on_mousewheel)
+            text_lbl.bind('<Button-4>', self._on_mousewheel)
+            text_lbl.bind('<Button-5>', self._on_mousewheel)
+            
+            emotion_lbl = ttk.Label(cell, text=result['emotion'] or '未分类')
+            emotion_lbl.pack()
+            emotion_lbl.bind('<MouseWheel>', self._on_mousewheel)
+            emotion_lbl.bind('<Button-4>', self._on_mousewheel)
+            emotion_lbl.bind('<Button-5>', self._on_mousewheel)
+            
+            self.item_paths[key] = file_path

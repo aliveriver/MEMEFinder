@@ -41,7 +41,7 @@ class GPUManager:
         
     def check_gpu_status(self):
         """检查GPU状态并更新UI"""
-        from ..utils.gpu_detector import get_gpu_recommendation
+        from ...utils.gpu_detector import get_gpu_recommendation
         
         # 获取详细的GPU状态
         self.gpu_info = get_gpu_recommendation()
@@ -117,8 +117,8 @@ class GPUManager:
             self.ocr_state['set_ocr_state'](False, None)
 
     def prompt_configure_gpu(self):
-        """提示配置GPU加速（复制CUDA DLL）"""
-        from ..utils.gpu_installer import show_install_dialog, show_install_progress_dialog
+        """提示GPU加速（复制CUDA DLL）"""
+        from ...utils.gpu_installer import show_install_dialog, show_install_progress_dialog
         
         # 显示配置确认对话框
         if show_install_dialog(self.ui['parent']):
@@ -135,8 +135,8 @@ class GPUManager:
     
     def configure_cuda_path(self):
         """配置 CUDA 路径"""
-        from ..utils.cuda_validator import validate_cuda_path
-        from ..utils.cuda_finder import find_cuda_installation
+        from ...utils.cuda_validator import validate_cuda_path
+        from ...utils.cuda_finder import find_cuda_installation
         
         # 获取默认CUDA路径（从环境变量）
         default_cuda_path = os.environ.get('CUDA_PATH', '')
