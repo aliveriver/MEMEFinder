@@ -165,10 +165,9 @@ class ProcessTab:
             messagebox.showinfo("提示", "没有待处理的图片")
             return
         
-        # 初始化OCR
-        if not self.processor._ocr_initialized:
-            if not self.processor.initialize_ocr():
-                return
+        # 检查模型状态并让用户确认
+        if not self._check_and_confirm_models():
+            return
         
         # 标记应用状态
         try:
@@ -180,12 +179,97 @@ class ProcessTab:
         self.processor.processing = True
         self.log_message("=" * 50)
         self.log_message("开始处理图片...")
+        
+        # 如果OCR未初始化，提示用户后台加载中
+        if not self.processor._ocr_initialized:
+            self.log_message("[提示] 正在后台加载OCR模型，请稍候...")
+            self.log_message("[提示] 首次加载需要5-10秒，请耐心等待")
+        
         self.log_message("=" * 50)
         
-        # 在单独线程中处理
+        # 在单独线程中处理（OCR初始化也在线程中）
         self.processing_thread = threading.Thread(target=self._process_images_thread)
         self.processing_thread.daemon = True
         self.processing_thread.start()
+    
+    def _check_and_confirm_models(self):
+        """
+        检查模型状态并让用户确认
+        
+        Returns:
+            bool: 用户是否确认开始处理
+        """
+        from tkinter import messagebox
+        from ..utils.model_manager import get_model_manager
+        
+        try:
+            model_manager = get_model_manager()
+            
+            # 检查OCR模型
+            ocr_exists, ocr_missing = model_manager.check_ocr_models()
+            
+            # 检查情感分析模型
+            sentiment_installed, sentiment_name = model_manager.check_sentiment_model()
+            
+            # 获取当前设置
+            enable_ocr = self.ui.enable_ocr_var.get()
+            enable_sentiment = self.ui.enable_sentiment_var.get()
+            
+            # 构建状态信息
+            issues = []
+            warnings = []
+            
+            # 检查OCR状态
+            if enable_ocr and not ocr_exists:
+                issues.append(f"❌ OCR模型未安装\n   缺失: {', '.join(ocr_missing)}")
+            elif enable_ocr:
+                warnings.append("✅ OCR模型已安装")
+            else:
+                warnings.append("⚠ OCR功能已禁用")
+            
+            # 检查情感分析状态  
+            if enable_sentiment and not sentiment_installed:
+                warnings.append("⚠ 情感分析模型未安装，将使用关键词匹配")
+            elif enable_sentiment:
+                warnings.append(f"✅ 情感分析已启用 ({sentiment_name})")
+            else:
+                warnings.append("⚠ 情感分析已禁用")
+            
+            # 如果有严重问题，拒绝开始
+            if issues:
+                message = "无法开始处理，存在以下问题:\n\n" + "\n\n".join(issues)
+                message += "\n\n请先下载缺失的模型。"
+                messagebox.showerror("模型检查失败", message)
+                return False
+            
+            # 显示确认对话框
+            total_images = len(self.db.get_unprocessed_images(limit=10000))
+            message = f"准备处理 {total_images} 张图片\n\n当前模型状态:\n\n"
+            message += "\n".join(warnings)
+            message += "\n\n是否开始处理？"
+            
+            result = messagebox.askyesno("确认开始处理", message, icon='question')
+            
+            if result:
+                self.log_message("=" * 50)
+                self.log_message("[确认] 用户已确认开始处理")
+                for msg in warnings:
+                    self.log_message(f"  {msg}")
+                self.log_message("=" * 50)
+            else:
+                self.log_message("[取消] 用户取消了处理操作")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"模型状态检查失败: {e}")
+            # 如果检查失败，询问用户是否继续
+            result = messagebox.askyesno(
+                "模型检查异常",
+                f"模型状态检查时出现异常:\n{str(e)}\n\n是否继续处理？",
+                icon='warning'
+            )
+            return result
     
     def pause_processing(self):
         """暂停处理"""
@@ -212,6 +296,29 @@ class ProcessTab:
     def _process_images_thread(self):
         """处理图片的线程"""
         try:
+            # 在后台线程中初始化OCR（如果需要）
+            if not self.processor._ocr_initialized:
+                # 更新UI显示"正在加载模型"
+                self.frame.after(0, lambda: self.ui.progress_label.config(text="正在加载OCR模型，请稍候..."))
+                self.frame.after(0, lambda: self.ui.progress_var.set(5))
+                
+                self.log_message("[INFO] 后台初始化OCR处理器...")
+                if not self.processor.initialize_ocr():
+                    self.log_message("[错误] OCR初始化失败，无法继续处理")
+                    self.processing = False
+                    self.processor.processing = False
+                    self.frame.after(0, lambda: self.ui.progress_label.config(text="OCR初始化失败"))
+                    self.frame.after(0, lambda: self.ui.progress_var.set(0))
+                    try:
+                        self.db.set_app_state('processing_state', 'idle')
+                    except Exception:
+                        pass
+                    return
+                
+                # 初始化完成，更新UI
+                self.frame.after(0, lambda: self.ui.progress_label.config(text="OCR模型加载完成"))
+                self.frame.after(0, lambda: self.ui.progress_var.set(10))
+            
             unprocessed = self.db.get_unprocessed_images(limit=10000)
             
             if not unprocessed:
@@ -260,6 +367,15 @@ class ProcessTab:
         except Exception:
             pass
         
+        # 清理数据库缓存
+        try:
+            # ImageDatabase使用conn而不是connection
+            if hasattr(self.db, 'conn'):
+                self.db.conn.commit()  # 确保所有更改已写入
+                logger.info("数据库缓存已清理")
+        except Exception as e:
+            logger.warning(f"清理数据库缓存失败: {e}")
+        
         # 最后一次更新统计信息
         self._update_stats()
         
@@ -277,7 +393,20 @@ class ProcessTab:
         """添加日志消息(线程安全)"""
         def _log():
             timestamp = datetime.now().strftime("%H:%M:%S")
-            self.ui.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
+            log_line = f"[{timestamp}] {message}\n"
+            
+            # 插入日志
+            self.ui.log_text.insert(tk.END, log_line)
+            
+            # 限制日志大小：保留最近500行
+            try:
+                line_count = int(self.ui.log_text.index('end-1c').split('.')[0])
+                if line_count > 500:
+                    # 删除前100行
+                    self.ui.log_text.delete('1.0', '101.0')
+            except Exception as e:
+                logger.debug(f"清理日志时出错: {e}")
+            
             self.ui.log_text.see(tk.END)
         
         try:
