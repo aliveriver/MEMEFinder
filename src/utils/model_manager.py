@@ -74,12 +74,22 @@ class ModelManager:
             (是否已安装, 模型名称)
         """
         try:
-            import snownlp
-            # 检查SnowNLP的情感分析模型
-            snownlp_data = Path(snownlp.__file__).parent / 'sentiment'
+            # 不导入snownlp，只检查文件是否存在
+            # 避免在确认对话框阶段就加载300MB+的模型数据
+            import sys
+            import importlib.util
+            
+            # 检查snownlp是否已安装(但不导入)
+            spec = importlib.util.find_spec('snownlp')
+            if spec is None:
+                return False, ''
+            
+            # 检查snownlp的情感分析模型文件是否存在
+            snownlp_path = Path(spec.origin).parent
+            snownlp_data = snownlp_path / 'sentiment'
             if snownlp_data.exists() and (snownlp_data / 'sentiment.marshal.3').exists():
                 return True, 'SnowNLP'
-        except ImportError:
+        except Exception:
             pass
         
         return False, ''

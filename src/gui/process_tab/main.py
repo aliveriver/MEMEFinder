@@ -154,6 +154,25 @@ class ProcessTab:
     def _configure_cuda_path(self):
         self.gpu_manager.configure_cuda_path()
     
+    def _unload_snownlp_if_imported(self):
+        """卸载可能已导入的snownlp模块以释放内存"""
+        try:
+            import sys
+            snownlp_modules = [mod for mod in list(sys.modules.keys()) if 'snownlp' in mod.lower()]
+            if snownlp_modules:
+                self.log_message(f"[清理] 检测到{len(snownlp_modules)}个SnowNLP模块，正在卸载...")
+                for mod in snownlp_modules:
+                    try:
+                        del sys.modules[mod]
+                    except:
+                        pass
+                # 强制垃圾回收
+                collected = gc.collect()
+                logger.info(f"Unloaded {len(snownlp_modules)} SnowNLP modules, collected {collected} objects")
+                self.log_message(f"[清理] SnowNLP模块已卸载，释放了{collected}个对象")
+        except Exception as e:
+            logger.debug(f"Failed to unload SnowNLP: {e}")
+    
     # 处理控制方法
     def start_processing(self):
         """开始处理图片"""
@@ -191,6 +210,9 @@ class ProcessTab:
                 if self.processor.ocr_processor and not self.processing:
                     self.log_message("[取消] 检测到已加载的模型，5秒后将自动卸载以释放内存")
                     self.processor._schedule_model_unload()
+                
+                # 卸载可能已导入的snownlp模块(在check_sentiment_model时可能导入)
+                self._unload_snownlp_if_imported()
                 return
             
             # 用户确认后，标记状态并启动处理
