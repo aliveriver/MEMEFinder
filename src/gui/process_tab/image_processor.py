@@ -14,14 +14,6 @@ from ...utils.logger import get_logger
 from .worker import _process_images_in_subprocess, _process_image_worker
 from .memory_utils import MemoryMonitor
 
-# Windows多进程支持
-import multiprocessing
-if __name__ != '__main__':
-    try:
-        multiprocessing.set_start_method('spawn', force=True)
-    except RuntimeError:
-        pass
-
 logger = get_logger()
 
 
