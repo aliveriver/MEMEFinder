@@ -101,13 +101,20 @@ python scripts/package_all.py
     ├── core/                # 核心逻辑
     │   ├── database.py      # 数据库管理
     │   ├── scanner.py       # 文件扫描
-    │   ├── ocr_engine.py    # OCR 引擎封装
-    │   ├── emotion_analyzer.py # 情绪分析
-    │   └── ocr_processor.py # OCR + 情绪分析处理流程
+    │   └── ocr/             # OCR 模块（模块化设计）
+    │       ├── ocr_engine.py        # OCR 引擎封装
+    │       ├── processor.py         # OCR 处理器主入口
+    │       ├── sentiment_analyzer.py # 情感分析
+    │       └── text_processor.py    # 文本提取与过滤
     ├── gui/                 # 图形界面
     │   ├── main_window.py   # 主窗口
     │   ├── source_tab.py    # 图源管理页
-    │   ├── process_tab.py   # 图片处理页
+    │   ├── process_tab/     # 图片处理页（模块化）
+    │   │   ├── process_tab.py       # 主协调器
+    │   │   ├── process_tab_ui.py    # UI 组件
+    │   │   ├── process_tab_models.py # 模型管理
+    │   │   ├── process_tab_gpu.py   # GPU 管理
+    │   │   └── process_tab_processor.py # 处理逻辑
     │   ├── search_tab.py    # 图片搜索页
     │   └── loading_window.py # 加载窗口
     └── utils/               # 工具模块
@@ -115,6 +122,9 @@ python scripts/package_all.py
         ├── resource_path.py # 资源路径管理
         ├── model_manager.py # 模型管理
         ├── gpu_detector.py  # GPU 检测
+        ├── gpu_installer.py # GPU 安装配置
+        ├── cuda_finder.py   # CUDA 路径查找
+        ├── cuda_validator.py # CUDA 验证
         └── resource_monitor.py # 资源监控
 
 ---
