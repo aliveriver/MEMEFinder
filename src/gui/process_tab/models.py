@@ -7,7 +7,7 @@ ProcessTab 模型管理模块
 
 import threading
 from tkinter import messagebox
-from ..utils.logger import get_logger
+from ...utils.logger import get_logger
 
 logger = get_logger()
 
@@ -30,7 +30,7 @@ class ModelManager:
         
     def download_ocr_models(self):
         """下载OCR模型"""
-        from ..utils.model_manager import get_model_manager
+        from ...utils.model_manager import get_model_manager
         model_manager = get_model_manager()
         
         # 检查是否已安装
@@ -86,7 +86,7 @@ class ModelManager:
     
     def download_sentiment_model(self):
         """下载/安装情感分析模型"""
-        from ..utils.model_manager import get_model_manager
+        from ...utils.model_manager import get_model_manager
         model_manager = get_model_manager()
         
         # 检查是否已安装
@@ -129,7 +129,7 @@ class ModelManager:
         # 在后台线程中执行检查
         def check_thread():
             try:
-                from ..utils.model_manager import get_model_manager
+                from ...utils.model_manager import get_model_manager
                 model_manager = get_model_manager()
                 
                 # 检查OCR模型
@@ -211,7 +211,7 @@ OCR模型: {'✅ 已安装' if ocr_exists else '❌ 未安装'}
         enabled = self.ui_vars['enable_ocr_var'].get()
         if enabled:
             # 检查OCR模型是否存在
-            from ..utils.model_manager import get_model_manager
+            from ...utils.model_manager import get_model_manager
             model_manager = get_model_manager()
             all_exists, missing = model_manager.check_ocr_models()
             
@@ -239,7 +239,7 @@ OCR模型: {'✅ 已安装' if ocr_exists else '❌ 未安装'}
         enabled = self.ui_vars['enable_sentiment_var'].get()
         if enabled:
             # 检查情感分析模型是否安装
-            from ..utils.model_manager import get_model_manager
+            from ...utils.model_manager import get_model_manager
             model_manager = get_model_manager()
             installed, model_name = model_manager.check_sentiment_model()
             

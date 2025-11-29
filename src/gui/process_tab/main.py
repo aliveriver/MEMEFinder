@@ -10,14 +10,14 @@ import threading
 from datetime import datetime
 from typing import Optional
 
-from ..core.database import ImageDatabase
-from ..utils.logger import get_logger
+from ...core.database import ImageDatabase
+from ...utils.logger import get_logger
 
 # 导入重构后的模块
-from .process_tab_ui import ProcessTabUI
-from .process_tab_models import ModelManager
-from .process_tab_gpu import GPUManager
-from .process_tab_processor import ImageProcessor
+from .ui import ProcessTabUI
+from .models import ModelManager
+from .gpu import GPUManager
+from .image_processor import ImageProcessor
 
 logger = get_logger()
 
@@ -208,7 +208,7 @@ class ProcessTab:
             bool: 用户是否确认开始处理
         """
         from tkinter import messagebox
-        from ..utils.model_manager import get_model_manager
+        from ...utils.model_manager import get_model_manager
         
         try:
             model_manager = get_model_manager()
