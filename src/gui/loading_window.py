@@ -425,7 +425,7 @@ class ModelLoadingWindow(LoadingWindow):
                 self.set_progress(75, "正在初始化文字识别引擎...", "准备表情包文字识别模块（CPU模式）")
             
             # 使用延迟加载模式创建OCR处理器
-            from ..core.ocr_processor import OCRProcessor
+            from ..core.ocr import OCRProcessor
             
             # 获取模型目录
             model_manager = get_model_manager()

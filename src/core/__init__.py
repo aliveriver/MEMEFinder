@@ -6,6 +6,6 @@
 
 from .database import ImageDatabase
 from .scanner import ImageScanner
-from .ocr_processor import OCRProcessor
+from .ocr import OCRProcessor
 
 __all__ = ['ImageDatabase', 'ImageScanner', 'OCRProcessor']

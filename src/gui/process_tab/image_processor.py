@@ -9,7 +9,7 @@ import gc
 import threading
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from ...core.ocr_processor import OCRProcessor
+from ...core.ocr import OCRProcessor
 from ...utils.logger import get_logger
 from .worker import _process_images_in_subprocess, _process_image_worker
 from .memory_utils import MemoryMonitor
@@ -211,9 +211,7 @@ class ImageProcessor:
                     # 5. 清理NumPy/OpenCV缓存
                     self.memory_monitor.cleanup_numpy_cache()
                     
-                    self.log_message("[INFO] ✓ 模型已释放，已节省约735MB内存")
-                    logger.info("  - OCR模型: ~350MB")
-                    logger.info("  - SnowNLP模型: ~385MB")
+                    self.log_message("[INFO] ✓ 模型已释放")
                     self.log_message("[INFO] 下次处理时将自动重新加载模型")
                     logger.info("Models unloaded successfully")
                     

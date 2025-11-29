@@ -33,7 +33,7 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
         处理结果列表
     """
     from ...core.database import ImageDatabase
-    from ...core.ocr_processor import OCRProcessor
+    from ...core.ocr import OCRProcessor
     import logging
     import threading
     
@@ -221,7 +221,7 @@ def _process_image_worker(img_info, enable_ocr, enable_sentiment, use_gpu, db_pa
         处理结果字典
     """
     from ...core.database import ImageDatabase
-    from ...core.ocr_processor import OCRProcessor
+    from ...core.ocr import OCRProcessor
     import logging
     
     # 子进程中重新配置日志（避免与主进程冲突）
