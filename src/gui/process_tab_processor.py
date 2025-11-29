@@ -26,7 +26,7 @@ logger = get_logger()
 
 
 # 全局函数：在单个子进程中使用多线程处理所有图片
-def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_gpu, db_path, max_workers):
+def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_gpu, db_path, max_workers, progress_queue=None):
     """
     在单个子进程中使用多线程处理多张图片
     
@@ -34,6 +34,7 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
     - 使用1个子进程隔离主进程内存
     - 在子进程内使用多线程并行处理
     - OCR模型只加载一次，所有线程共享
+    - 数据库连接只创建一次，使用锁保护并发访问
     
     Args:
         image_list: 图片信息列表
@@ -42,6 +43,7 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
         use_gpu: 是否使用GPU
         db_path: 数据库路径
         max_workers: 子进程内的线程数
+        progress_queue: 进度队列，用于实时更新UI
     
     Returns:
         处理结果列表
@@ -57,8 +59,13 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
     
     results = []
     ocr_processor = None
+    db = None  # 共享数据库实例
+    db_lock = threading.Lock()  # 数据库操作锁
     
     try:
+        # 初始化共享数据库连接（只创建一次）
+        db = ImageDatabase(db_path)
+        
         # 在子进程中初始化OCR处理器（只初始化一次）
         if enable_ocr:
             ocr_processor = OCRProcessor(
@@ -79,33 +86,31 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
                 ]
         
         # 定义线程工作函数
-        def process_one_image(img_info):
+        def process_one_image(img_info, index):
             img_id = img_info['id']
             img_path = img_info['file_path']
             
-            db = None  # 确保在finally中能访问
             try:
                 if not Path(img_path).exists():
-                    return {
+                    result = {
                         'success': False,
                         'id': img_id,
                         'path': img_path,
                         'error': '文件不存在'
                     }
-                
-                if not enable_ocr:
+                elif not enable_ocr:
                     # 不启用OCR时直接写入空数据
-                    db = ImageDatabase(db_path)
-                    db.update_image_data(
-                        image_id=img_id,
-                        ocr_text='',
-                        filtered_text='',
-                        emotion='未处理',
-                        pos_score=0.0,
-                        neg_score=0.0
-                    )
+                    with db_lock:
+                        db.update_image_data(
+                            image_id=img_id,
+                            ocr_text='',
+                            filtered_text='',
+                            emotion='未处理',
+                            pos_score=0.0,
+                            neg_score=0.0
+                        )
                     
-                    return {
+                    result = {
                         'success': True,
                         'id': img_id,
                         'path': img_path,
@@ -117,48 +122,69 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
                             'emotion_negative': 0.0
                         }
                     }
+                else:
+                    # 使用共享的OCR处理器处理图片
+                    ocr_result = ocr_processor.process_image(Path(img_path))
+                    
+                    # 使用锁保护数据库写入操作
+                    with db_lock:
+                        db.update_image_data(
+                            image_id=img_id,
+                            ocr_text=ocr_result['ocr_text'],
+                            filtered_text=ocr_result['filtered_text'],
+                            emotion=ocr_result['emotion'],
+                            pos_score=ocr_result['emotion_positive'],
+                            neg_score=ocr_result['emotion_negative']
+                        )
+                    
+                    result = {
+                        'success': True,
+                        'id': img_id,
+                        'path': img_path,
+                        'result': ocr_result
+                    }
                 
-                # 使用共享的OCR处理器处理图片
-                result = ocr_processor.process_image(Path(img_path))
+                # 发送进度更新到主进程
+                if progress_queue:
+                    try:
+                        progress_queue.put({
+                            'type': 'progress',
+                            'index': index,
+                            'total': len(image_list),
+                            'result': result
+                        })
+                    except Exception:
+                        pass
                 
-                # 更新数据库（每个线程独立连接）
-                db = ImageDatabase(db_path)
-                db.update_image_data(
-                    image_id=img_id,
-                    ocr_text=result['ocr_text'],
-                    filtered_text=result['filtered_text'],
-                    emotion=result['emotion'],
-                    pos_score=result['emotion_positive'],
-                    neg_score=result['emotion_negative']
-                )
-                
-                return {
-                    'success': True,
-                    'id': img_id,
-                    'path': img_path,
-                    'result': result
-                }
+                return result
                 
             except Exception as e:
                 import traceback
-                return {
+                result = {
                     'success': False,
                     'id': img_id,
                     'path': img_path,
                     'error': f"{str(e)}\n{traceback.format_exc()}"
                 }
-            finally:
-                # 关键：确保数据库连接被正确关闭
-                if db is not None:
+                
+                # 即使失败也发送进度更新
+                if progress_queue:
                     try:
-                        db.close()
-                        del db
+                        progress_queue.put({
+                            'type': 'progress',
+                            'index': index,
+                            'total': len(image_list),
+                            'result': result
+                        })
                     except Exception:
                         pass
+                
+                return result
         
         # 使用线程池并行处理
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(process_one_image, img) for img in image_list]
+            futures = {executor.submit(process_one_image, img, idx): idx 
+                      for idx, img in enumerate(image_list, 1)}
             
             for future in as_completed(futures):
                 try:
@@ -170,17 +196,6 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
                         'success': False,
                         'error': f"线程异常: {str(e)}\n{traceback.format_exc()}"
                     })
-        
-        # 清理OCR处理器
-        if ocr_processor:
-            try:
-                del ocr_processor
-            except Exception:
-                pass
-        
-        # 强制垃圾回收
-        import gc
-        gc.collect()
         
         return results
         
@@ -194,14 +209,17 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
             for _ in image_list
         ]
     finally:
-        # 确保清理
+        # 清理资源
         try:
-            if 'ocr_processor' in locals() and ocr_processor:
+            if ocr_processor:
                 del ocr_processor
+            if db:
+                db.close()
+                del db
         except Exception:
             pass
         
-        # 最终GC
+        # 强制垃圾回收
         import gc
         gc.collect()
 
@@ -720,9 +738,13 @@ class ImageProcessor:
         优势：
         1. 内存隔离：子进程与主进程内存完全隔离
         2. 模型共享：OCR模型只加载一次，线程共享
-        3. 并行处理：多线程充分利用CPU
-        4. 自动回收：子进程结束后内存自动释放
+        3. 数据库复用：数据库连接只创建一次，使用锁保护
+        4. 并行处理：多线程充分利用CPU
+        5. 自动回收：子进程结束后内存自动释放
         """
+        from multiprocessing import Manager
+        import time
+        
         total = len(unprocessed)
         processed_count = 0
         error_count = 0
@@ -731,8 +753,8 @@ class ImageProcessor:
         self.log_message(f"混合处理模式: 1个子进程 + {max_workers} 个工作线程")
         self.log_message(f"待处理图片总数: {total}")
         # 架构细节只记录到日志文件
-        logger.info(f"[架构] 主进程(GUI) → 子进程(OCR模型) → 多线程(并行处理)")
-        logger.info(f"[优势] 内存隔离 + 模型共享 + 多线程并行")
+        logger.info(f"[架构] 主进程(GUI) → 子进程(OCR模型+共享DB) → 多线程(并行处理)")
+        logger.info(f"[优势] 内存隔离 + 模型共享 + DB复用 + 多线程并行")
         self.log_message("=" * 50)
         
         logger.info(f"Starting hybrid processing: 1 subprocess with {max_workers} threads for {total} images")
@@ -742,6 +764,10 @@ class ImageProcessor:
         enable_sentiment = self.ui_vars['enable_sentiment_var'].get()
         use_gpu = self.ui_vars['gpu_enabled_var'].get()
         db_path = self.db.db_path if hasattr(self.db, 'db_path') else 'meme_finder.db'
+        
+        # 创建进度队列用于实时更新
+        manager = Manager()
+        progress_queue = manager.Queue()
         
         # 使用单个子进程处理所有图片（内部使用多线程）
         with ProcessPoolExecutor(max_workers=1) as executor:
@@ -753,113 +779,119 @@ class ImageProcessor:
                 enable_sentiment,
                 use_gpu,
                 db_path,
-                max_workers
+                max_workers,
+                progress_queue  # 传递进度队列
             )
             
             self.log_message(f"已启动子进程，内部使用 {max_workers} 个线程处理...")
             logger.info(f"Subprocess started with {max_workers} internal threads")
             
-            # 等待子进程完成（需要实现进度反馈）
+            # 实时监听进度更新
             try:
-                # 简单的等待动画
-                import time
                 while not future.done():
                     if not self.processing:
                         self.log_message("[暂停] 正在终止子进程...")
                         executor.shutdown(wait=False, cancel_futures=True)
                         break
                     
-                    # 更新等待提示
-                    time.sleep(0.5)
+                    # 检查进度队列
+                    try:
+                        while not progress_queue.empty():
+                            progress_data = progress_queue.get_nowait()
+                            if progress_data['type'] == 'progress':
+                                index = progress_data['index']
+                                total_imgs = progress_data['total']
+                                result = progress_data['result']
+                                
+                                # 更新进度
+                                if result.get('success'):
+                                    processed_count += 1
+                                    filename = Path(result['path']).name if result.get('path') else f"图片{index}"
+                                    self.log_message(f"[{index}/{total_imgs}] ✓ {filename}")
+                                    
+                                    # 显示文本预览
+                                    if 'result' in result and result['result'].get('filtered_text'):
+                                        preview = result['result']['filtered_text'][:50]
+                                        if len(result['result']['filtered_text']) > 50:
+                                            preview += "..."
+                                        self.log_message(f"  文本: {preview}")
+                                        self.log_message(f"  情绪: {result['result']['emotion']}")
+                                else:
+                                    error_count += 1
+                                    filename = Path(result['path']).name if result.get('path') else f"图片{index}"
+                                    self.log_message(f"[{index}/{total_imgs}] ✗ {filename} - {result.get('error', '未知错误')}")
+                                
+                                # 更新进度条
+                                progress = (index / total_imgs) * 100
+                                self.ui_updaters['progress'](progress)
+                                self.ui_updaters['progress_label'](f"处理进度: {index}/{total_imgs}")
+                    except Exception:
+                        pass
+                    
+                    # 短暂休眠避免CPU占用过高
+                    time.sleep(0.1)
                 
+                # 处理子进程完成后的剩余消息
                 if future.done() and not future.cancelled():
-                    # 获取所有结果
+                    # 清空队列中的剩余消息
+                    try:
+                        while not progress_queue.empty():
+                            progress_data = progress_queue.get_nowait()
+                            if progress_data['type'] == 'progress':
+                                index = progress_data['index']
+                                total_imgs = progress_data['total']
+                                result = progress_data['result']
+                                
+                                if result.get('success'):
+                                    processed_count += 1
+                                else:
+                                    error_count += 1
+                                
+                                progress = (index / total_imgs) * 100
+                                self.ui_updaters['progress'](progress)
+                                self.ui_updaters['progress_label'](f"处理进度: {index}/{total_imgs}")
+                    except Exception:
+                        pass
+                    
+                    # 获取最终结果（用于统计）
                     results = future.result()
                     
-                    # 【优化1】分批处理结果，避免一次性保留所有结果对象
-                    # 每处理10个结果就释放一次，减少内存峰值
-                    batch_size = 10
-                    temp_results = []
+                    # 统计最终结果
+                    final_success = sum(1 for r in results if r.get('success'))
+                    final_error = sum(1 for r in results if not r.get('success'))
                     
-                    for idx, result in enumerate(results, 1):
-                        if not self.processing:
-                            break
-                        
-                        # 提取必要信息后立即释放原始result
-                        success = result.get('success', False)
-                        img_path = result.get('path', '')
-                        filename = Path(img_path).name if img_path else f"图片{idx}"
-                        
-                        if success:
-                            processed_count += 1
-                            self.log_message(f"[{idx}/{total}] ✓ {filename}")
-                            
-                            # 只提取需要显示的信息，不保留整个result对象
-                            if 'result' in result and result['result'].get('filtered_text'):
-                                preview = result['result']['filtered_text'][:50]
-                                if len(result['result']['filtered_text']) > 50:
-                                    preview += "..."
-                                emotion = result['result'].get('emotion', '')
-                                pos = result['result'].get('emotion_positive', 0.0)
-                                neg = result['result'].get('emotion_negative', 0.0)
-                                self.log_message(f"  文本: {preview}")
-                                self.log_message(f"  情绪: {emotion} (正:{pos:.2f}, 负:{neg:.2f})")
-                            else:
-                                self.log_message(f"  未识别到文本")
-                        else:
-                            error_count += 1
-                            error = result.get('error', '未知错误')
-                            # 只显示错误的前100个字符，避免过长
-                            error_short = error[:100] + '...' if len(error) > 100 else error
-                            self.log_message(f"[{idx}/{total}] ✗ {filename}")
-                            self.log_message(f"  错误: {error_short}")
-                        
-                        # 更新进度
-                        completed = idx
-                        progress = (completed / total) * 100
-                        self.ui_updaters['progress'](progress)
-                        self.ui_updaters['progress_label'](
-                            f"正在处理: {completed}/{total} (成功:{processed_count}, 失败:{error_count})"
-                        )
-                        
-                        if completed % 10 == 0:
-                            self.log_message(f"--- 进度: {completed}/{total} ({progress:.1f}%) | 成功: {processed_count} | 失败: {error_count} ---")
-                            logger.info(f"Progress: {completed}/{total} - Success: {processed_count}, Failed: {error_count}")
-                            self.ui_updaters['stats']()
-                            
-                            # 【优化2】每10个结果就强制GC一次，及时回收
-                            import gc
-                            gc.collect(0)  # 只回收第0代，速度快
-                        
-                        # 【优化3】显式清理result对象中的大数据
-                        if 'result' in result:
-                            del result['result']
-                        del result
+                    self.log_message(f"\n子进程处理完成")
+                    self.log_message(f"成功: {final_success}, 失败: {final_error}")
                     
-                    # 【优化4】处理完立即释放整个results列表
+                    # 释放结果列表
                     del results
                     import gc
-                    gc.collect()  # 完整GC
-                    gc.collect(2)  # 再次GC第2代，确保彻底清理
+                    gc.collect()
                 
             except Exception as e:
                 self.log_message(f"[错误] 子进程处理失败: {e}")
                 logger.error(f"Subprocess processing failed: {e}")
                 import traceback
                 logger.debug(traceback.format_exc())
-                error_count = total
+        
+        # 清理进度队列
+        try:
+            manager.shutdown()
+        except Exception:
+            pass
         
         logger.info(f"Hybrid processing completed: {processed_count} successful, {error_count} failed")
         
         # 混合模式：子进程已退出，内存已释放
         self.log_message(f"\n[INFO] 混合模式处理完成")
+        self.log_message(f"[INFO] 成功: {processed_count}, 失败: {error_count}")
         self.log_message(f"[INFO] 子进程已退出，所有内存已释放")
         # 技术细节只记录到日志文件
-        logger.info(f"子进程内存（约600MB）已完全释放")
+        logger.info(f"子进程内存已完全释放")
         logger.info(f"子进程内使用了 {max_workers} 个线程并行处理")
-        logger.info(f"OCR模型仅加载一次，被所有线程共享")
+        logger.info(f"OCR模型和数据库连接仅加载一次，被所有线程共享")
         
-        # 【优化5】多次强制GC，确保主进程内存彻底清理
+        # 【优化】多次强制GC，确保主进程内存彻底清理
         # GC信息只记录到日志文件
         logger.info("主进程开始强制垃圾回收...")
         
@@ -886,6 +918,11 @@ class ImageProcessor:
         if self.ocr_processor:
             self._schedule_model_unload()
         
+        # 最终统计
+        self.log_message("=" * 50)
+        self.log_message(f"处理统计: 总数={total}, 成功={processed_count}, 失败={error_count}")
+        logger.info(f"Final stats: total={total}, success={processed_count}, failed={error_count}")
+        self.log_message("=" * 50)
         finish_callback(processed_count, error_count)
     
     def process_images_singlethread(self, unprocessed, finish_callback):
