@@ -349,7 +349,7 @@ class ProcessTab:
             use_multithread = self.ui.get_multithread_enabled()
             
             if use_multithread and max_workers > 1:
-                self.log_message(f"[INFO] 使用多线程模式，{max_workers} 个并行工作线程")
+                self.log_message(f"[INFO] 使用混合模式: 1个子进程 + {max_workers}个线程")
                 self.log_message(f"[INFO] 开始处理 {total} 张图片...")
                 self.processor.process_images_multithread(unprocessed, max_workers, self._finish_processing)
             else:
@@ -369,8 +369,9 @@ class ProcessTab:
             logger.error(error_msg)
             import traceback
             traceback_str = traceback.format_exc()
-            self.log_message(traceback_str)
+            # traceback详情只记录到日志文件
             logger.debug(traceback_str)
+            self.log_message("[错误] 详细错误信息已记录到日志文件")
     
     def _finish_processing(self, processed_count, error_count):
         """完成处理的收尾工作"""
@@ -403,8 +404,23 @@ class ProcessTab:
         self.log_message(f"  失败: {error_count} 张")
         self.log_message("=" * 50)
     
-    def log_message(self, message: str):
-        """添加日志消息(线程安全)"""
+    def log_message(self, message: str, show_in_ui: bool = True, log_level: str = 'info'):
+        """
+        添加日志消息(线程安全)
+        
+        Args:
+            message: 日志消息内容
+            show_in_ui: 是否在UI中显示（默认True）
+            log_level: 日志级别 ('debug', 'info', 'warning', 'error')，默认'info'
+        """
+        # 始终写入日志文件
+        log_method = getattr(logger, log_level.lower(), logger.info)
+        log_method(message)
+        
+        # 根据参数决定是否在UI中显示
+        if not show_in_ui:
+            return
+        
         def _log():
             timestamp = datetime.now().strftime("%H:%M:%S")
             log_line = f"[{timestamp}] {message}\n"
@@ -412,14 +428,20 @@ class ProcessTab:
             # 插入日志
             self.ui.log_text.insert(tk.END, log_line)
             
-            # 限制日志大小：保留最近500行
             try:
                 line_count = int(self.ui.log_text.index('end-1c').split('.')[0])
-                if line_count > 500:
-                    # 删除前100行
-                    self.ui.log_text.delete('1.0', '101.0')
+                if line_count > 200:
+                    # 删除前100行，保留后100行
+                    delete_count = line_count - 100
+                    self.ui.log_text.delete('1.0', f'{delete_count}.0')
+                    # 只记录到文件，不显示在UI
+                    logger.debug(f"UI日志清理：删除了前{delete_count}行，当前保留100行")
+                    
+                    # 【优化】每次清理后强制更新显示，释放Tkinter内部缓存
+                    self.ui.log_text.update_idletasks()
             except Exception as e:
-                logger.debug(f"清理日志时出错: {e}")
+                # 只记录到文件，不显示在UI
+                logger.debug(f"UI日志清理时出错: {e}")
             
             self.ui.log_text.see(tk.END)
         
