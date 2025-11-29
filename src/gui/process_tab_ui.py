@@ -98,7 +98,7 @@ class ProcessTabUI:
         self.thread_spinbox.pack(side=tk.LEFT, padx=5)
         
         self.multithread_var = tk.BooleanVar(value=initial_values['use_multithread'])
-        ttk.Checkbutton(thread_frame, text="启用多线程", 
+        ttk.Checkbutton(thread_frame, text="启用混合模式", 
                        variable=self.multithread_var).pack(side=tk.LEFT, padx=5)
     
     def _create_control_row2(self, parent, callbacks):
@@ -188,5 +188,5 @@ class ProcessTabUI:
             return 4
     
     def get_multithread_enabled(self):
-        """获取是否启用多线程"""
+        """获取是否启用混合模式（子进程+多线程）"""
         return self.multithread_var.get()
