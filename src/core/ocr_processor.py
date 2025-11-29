@@ -61,6 +61,9 @@ class OCRProcessor:
         # 处理计数器（用于定期清理内存）
         self._process_count = 0
         self._gc_interval = 10  # 每处理10张图片执行一次垃圾回收
+        
+        # 线程锁，确保模型只加载一次（多线程环境）
+        self._load_lock = threading.Lock()
 
         # 设置模型存储路径
         if model_dir is None:
@@ -409,74 +412,81 @@ class OCRProcessor:
     def load_ocr_model(self) -> bool:
         """
         加载OCR模型（用于延迟加载）
+        使用线程锁确保多线程环境下只加载一次
         
         Returns:
             是否加载成功
         """
+        # 双重检查锁定模式
         if self._ocr_loaded and self.ocr is not None:
-            logger.info("OCR模型已经加载")
             return True
         
-        logger.info("开始加载OCR模型...")
+        with self._load_lock:
+            # 再次检查，避免多个线程同时进入
+            if self._ocr_loaded and self.ocr is not None:
+                logger.info("OCR模型已由其他线程加载")
+                return True
         
-        # 使用保存的use_gpu参数
-        use_gpu = self.use_gpu
-        
-        # 检查模型文件是否存在
-        det_model = self.model_dir / 'ch_PP-OCRv4_det_infer.onnx'
-        rec_model = self.model_dir / 'ch_PP-OCRv4_rec_infer.onnx'
-        cls_model_v2 = self.model_dir / 'ch_ppocr_mobile_v2.0_cls_infer.onnx'
-        cls_model = cls_model_v2 if cls_model_v2.exists() else self.model_dir / 'ch_ppocr_mobile_v2_cls_infer.onnx'
-        
-        missing_models = []
-        if not det_model.exists():
-            missing_models.append(f"检测模型: {det_model.name}")
-        if not rec_model.exists():
-            missing_models.append(f"识别模型: {rec_model.name}")
-        if not cls_model.exists():
-            missing_models.append(f"方向分类: {cls_model.name}")
-        
-        if missing_models:
-            logger.error("=" * 60)
-            logger.error("缺少以下模型文件:")
-            for model in missing_models:
-                logger.error(f"  - {model}")
-            logger.error("")
-            logger.error("请通过界面的\"下载模型\"功能下载OCR模型")
-            logger.error("=" * 60)
-            return False
-        
-        try:
-            # 构建RapidOCR初始化参数
-            rapidocr_kwargs: Dict[str, Any] = {
-                'det_use_cuda': use_gpu,
-                'cls_use_cuda': use_gpu,
-                'rec_use_cuda': use_gpu,
-                'det_model_path': str(det_model),
-                'rec_model_path': str(rec_model),
-                'cls_model_path': str(cls_model),
-            }
+            logger.info("开始加载OCR模型...")
             
-            # 初始化RapidOCR
-            self.ocr = RapidOCR(**rapidocr_kwargs)
+            # 使用保存的use_gpu参数
+            use_gpu = self.use_gpu
             
-            if self.ocr is None:
-                raise Exception("RapidOCR 初始化返回 None")
+            # 检查模型文件是否存在
+            det_model = self.model_dir / 'ch_PP-OCRv4_det_infer.onnx'
+            rec_model = self.model_dir / 'ch_PP-OCRv4_rec_infer.onnx'
+            cls_model_v2 = self.model_dir / 'ch_ppocr_mobile_v2.0_cls_infer.onnx'
+            cls_model = cls_model_v2 if cls_model_v2.exists() else self.model_dir / 'ch_ppocr_mobile_v2_cls_infer.onnx'
             
-            self._ocr_loaded = True
-            logger.info("✓ OCR模型加载成功")
+            missing_models = []
+            if not det_model.exists():
+                missing_models.append(f"检测模型: {det_model.name}")
+            if not rec_model.exists():
+                missing_models.append(f"识别模型: {rec_model.name}")
+            if not cls_model.exists():
+                missing_models.append(f"方向分类: {cls_model.name}")
             
-            # 初始化情感分析（如果需要）
-            if self._use_senta_flag:
-                self._init_senta()
+            if missing_models:
+                logger.error("=" * 60)
+                logger.error("缺少以下模型文件:")
+                for model in missing_models:
+                    logger.error(f"  - {model}")
+                logger.error("")
+                logger.error("请通过界面的\"下载模型\"功能下载OCR模型")
+                logger.error("=" * 60)
+                return False
             
-            return True
-            
-        except Exception as e:
-            logger.error(f"✗ OCR模型加载失败: {e}")
-            import traceback
-            logger.debug(traceback.format_exc())
-            return False
+            try:
+                # 构建RapidOCR初始化参数
+                rapidocr_kwargs: Dict[str, Any] = {
+                    'det_use_cuda': use_gpu,
+                    'cls_use_cuda': use_gpu,
+                    'rec_use_cuda': use_gpu,
+                    'det_model_path': str(det_model),
+                    'rec_model_path': str(rec_model),
+                    'cls_model_path': str(cls_model),
+                }
+                
+                # 初始化RapidOCR
+                self.ocr = RapidOCR(**rapidocr_kwargs)
+                
+                if self.ocr is None:
+                    raise Exception("RapidOCR 初始化返回 None")
+                
+                self._ocr_loaded = True
+                logger.info("✓ OCR模型加载成功")
+                
+                # 初始化情感分析（如果需要）
+                if self._use_senta_flag:
+                    self._init_senta()
+                
+                return True
+                
+            except Exception as e:
+                logger.error(f"✗ OCR模型加载失败: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+                return False
 
     def process_image(self, image_path: Path, pad_ratio: float = 0.10) -> Dict[str, Any]:
         """
@@ -600,23 +610,42 @@ class OCRProcessor:
             logger.error(f"OCR识别异常: {e}")
             return {"image": str(img_path), "items": []}
         finally:
-            # 确保无论如何都释放feed_img
+            # 确保无论如何都释放feed_img（关键！）
             if feed_img is not None:
                 try:
                     feed_img.close()
                     del feed_img
                 except Exception:
                     pass
+            
+            # 强制GC释放图片内存
+            import gc
+            gc.collect()
 
     def _make_padded_tmp(self, img_path: Path, pad_ratio: float, pad_color=(0, 0, 0)) -> Tuple:
-        """创建外扩的临时图片（与 ocr_cli.py 一致，优化内存使用）"""
-        # 使用 Image.open 上下文管理器，自动关闭文件
-        with Image.open(img_path) as img:
+        """创建外扩的临时图片（优化内存版本）"""
+        img = None
+        canvas = None
+        try:
+            # 限制最大尺寸，避免大图占用过多内存
+            MAX_SIZE = 2048
+            
+            # 使用 Image.open 上下文管理器，自动关闭文件
+            img = Image.open(img_path)
+            
             # 转换为RGB（如果需要）
             if img.mode != "RGB":
                 img = img.convert("RGB")
             
             w, h = img.size
+            
+            # 如果图片太大，先缩小
+            if max(w, h) > MAX_SIZE:
+                ratio = MAX_SIZE / max(w, h)
+                new_w, new_h = int(w * ratio), int(h * ratio)
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                w, h = new_w, new_h
+                logger.debug(f"图片尺寸过大，已缩小至: {w}x{h}")
 
             if pad_ratio <= 0:
                 return img, (0, 0), (w, h)
@@ -626,10 +655,25 @@ class OCRProcessor:
             canvas = Image.new("RGB", (w + 2 * px, h + 2 * py), pad_color)
             canvas.paste(img, (px, py))
 
-            # 显式释放img
+            # 立即关闭原图，释放内存
+            img.close()
             del img
 
-        return canvas, (px, py), (w, h)
+            return canvas, (px, py), (w, h)
+            
+        except Exception as e:
+            # 确保异常情况下也释放内存
+            if img:
+                try:
+                    img.close()
+                except:
+                    pass
+            if canvas:
+                try:
+                    canvas.close()
+                except:
+                    pass
+            raise
 
     def _shift_items_to_original(self, items: List[Dict[str, Any]], dx: int, dy: int, orig_wh=None) -> List[Dict[str, Any]]:
         """将坐标回退到原图（与 ocr_cli.py 一致）"""
@@ -750,41 +794,6 @@ class OCRProcessor:
         # 3. 过滤多余空格和特殊字符
         text = re.sub(r'\s+', ' ', text)  # 多个空格替换为单个
         text = re.sub(r'[\_\-\|]{3,}', '', text)  # 连续的下划线、横线
-
-        # 4. 去除首尾空格
-        text = text.strip()
-
-        return text
-
-    # ==================== 情绪分析模型初始化（支持多种方案）====================
-
-    def _init_senta(self):
-        """
-        初始化情绪分析模型
-        
-        支持的模型（按优先级尝试）：
-        1. SnowNLP（轻量级，中文情感分析）
-        2. TextBlob（英文情感分析，如果有英文需求）
-        3. 关键词方法（默认回退方案）
-        """
-        # 方案1：尝试使用 SnowNLP（推荐，轻量且准确）
-        try:
-            from snownlp import SnowNLP
-            logger.info("正在初始化 SnowNLP 情绪分析模型...")
-            
-            # 测试模型是否正常工作
-            test = SnowNLP("这是一个测试")
-            _ = test.sentiments
-            
-            self._senta = 'snownlp'
-            self._use_senta = True
-            logger.info("SnowNLP 初始化成功（轻量级中文情感分析）")
-            return
-        except ImportError:
-            logger.info("SnowNLP 未安装，尝试其他方案...")
-            logger.info("如需使用 SnowNLP，请运行: pip install snownlp")
-        except Exception as e:
-            logger.warning(f"SnowNLP 初始化失败: {e}")
 
         # 方案2：尝试使用 TextBlob（适合英文）
         try:
