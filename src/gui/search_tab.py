@@ -43,6 +43,10 @@ class SearchTab:
         self.text_font = tkfont.Font(family="TkDefaultFont", size=9)
         self.emotion_font = tkfont.Font(family="TkDefaultFont", size=8)
         
+        # 多选筛选列表
+        self.selected_emotions = []  # 选中的情感列表
+        self.selected_sources = []   # 选中的图源ID列表
+        
         # 创建主框架
         self.frame = ttk.Frame(parent)
         self.create_widgets()
@@ -53,21 +57,52 @@ class SearchTab:
         search_frame = ttk. LabelFrame(self.frame, text="搜索条件", padding=10)
         search_frame.pack(fill=tk.X, padx=10, pady=10)
         
+        # 第一行：关键词
         ttk.Label(search_frame, text="关键词:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self. search_keyword = tk.StringVar()
         keyword_entry = ttk.Entry(search_frame, textvariable=self.search_keyword, width=40)
-        keyword_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        keyword_entry.grid(row=0, column=1, columnspan=3, sticky=tk.W, padx=5, pady=5)
         keyword_entry.bind('<Return>', lambda e: self.search_images())
-        
-        ttk.Label(search_frame, text="情绪:").grid(row=0, column=2, sticky=tk.W, padx=5, pady=5)
-        self. search_emotion = tk.StringVar()
-        emotion_combo = ttk.Combobox(search_frame, textvariable=self.search_emotion, 
-                                     values=['', '正向', '负向', '中性'], width=10, state='readonly')
-        emotion_combo.grid(row=0, column=3, sticky=tk. W, padx=5, pady=5)
-        emotion_combo.set('')
         
         ttk.Button(search_frame, text="🔍 搜索", command=self.search_images).grid(row=0, column=4, padx=5)
         ttk.Button(search_frame, text="🔄 刷新", command=self.refresh_page).grid(row=0, column=5, padx=5)
+        
+        # 第二行：情感多选
+        ttk.Label(search_frame, text="情绪:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        emotion_frame = ttk.Frame(search_frame)
+        emotion_frame.grid(row=1, column=1, columnspan=3, sticky=tk.W, padx=5, pady=5)
+        
+        self.emotion_vars = {}
+        emotions = [('正向', '正向'), ('负向', '负向'), ('中性', '中性')]
+        for idx, (label, value) in enumerate(emotions):
+            var = tk.BooleanVar(value=False)
+            self.emotion_vars[value] = var
+            cb = ttk.Checkbutton(emotion_frame, text=label, variable=var, 
+                                command=self._on_emotion_filter_change)
+            cb.grid(row=0, column=idx, padx=5)
+        
+        # 第三行：图源多选
+        ttk.Label(search_frame, text="图源:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
+        source_frame = ttk.Frame(search_frame)
+        source_frame.grid(row=2, column=1, columnspan=5, sticky=tk.W+tk.E, padx=5, pady=5)
+        
+        # 创建图源多选列表框
+        source_list_frame = ttk.Frame(source_frame)
+        source_list_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 滚动条
+        source_scrollbar = ttk.Scrollbar(source_list_frame, orient=tk.VERTICAL)
+        source_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Listbox 用于多选图源
+        self.source_listbox = tk.Listbox(source_list_frame, selectmode=tk.MULTIPLE, 
+                                        height=4, yscrollcommand=source_scrollbar.set)
+        self.source_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        source_scrollbar.config(command=self.source_listbox.yview)
+        self.source_listbox.bind('<<ListboxSelect>>', self._on_source_filter_change)
+        
+        # 加载图源列表
+        self._load_sources()
         
         # 结果列表区
         result_frame = ttk.LabelFrame(self.frame, text="搜索结果", padding=10)
@@ -137,11 +172,55 @@ class SearchTab:
         # 初始加载
         self.load_page()
     
+    def _load_sources(self):
+        """加载图源列表到Listbox"""
+        sources = self.db.get_sources()
+        self.source_listbox.delete(0, tk.END)
+        self.source_data = {}  # {index: source_id}
+        
+        for idx, source in enumerate(sources):
+            folder_path = source['folder_path']
+            # 显示文件夹名称（路径的最后部分）
+            folder_name = folder_path.split('\\')[-1] or folder_path.split('/')[-1] or folder_path
+            display_text = f"[{source['id']}] {folder_name}"
+            self.source_listbox.insert(tk.END, display_text)
+            self.source_data[idx] = source['id']
+    
+    def _on_emotion_filter_change(self):
+        """情感筛选变化回调"""
+        self.selected_emotions = [emotion for emotion, var in self.emotion_vars.items() if var.get()]
+        # 自动触发搜索
+        self.search_images()
+    
+    def _on_source_filter_change(self, event=None):
+        """图源筛选变化回调"""
+        selected_indices = self.source_listbox.curselection()
+        self.selected_sources = [self.source_data[idx] for idx in selected_indices]
+        # 自动触发搜索
+        self.search_images()
+    
+    def set_source_filter(self, source_ids):
+        """从外部设置图源筛选（用于从图源页面跳转）"""
+        if not isinstance(source_ids, list):
+            source_ids = [source_ids]
+        
+        self.selected_sources = source_ids
+        
+        # 在Listbox中选中对应的项
+        self.source_listbox.selection_clear(0, tk.END)
+        for idx, sid in self.source_data.items():
+            if sid in source_ids:
+                self.source_listbox.selection_set(idx)
+        
+        # 触发搜索
+        self.search_images()
+    
     def search_images(self):
         self.page_var.set(1)
         self.load_page()
     
     def refresh_page(self):
+        self._load_sources()  # 刷新图源列表
         self.load_page()
 
     def load_page(self):
@@ -156,7 +235,11 @@ class SearchTab:
         page = max(1, int(self.page_var.get()))
         page_size = int(self.page_size_var.get())
         keyword = self.search_keyword.get(). strip()
-        emotion = self. search_emotion.get()
+        
+        # 使用多选情感列表
+        emotions = self.selected_emotions if self.selected_emotions else None
+        # 使用多选图源列表
+        source_ids = self.selected_sources if self.selected_sources else None
  
         # 清空Canvas
         self.canvas.delete('all')
@@ -173,7 +256,7 @@ class SearchTab:
         self.frame.after(100, delayed_gc)
 
         # 计算总页数
-        total = self.db.get_images_count(processed=1, keyword=keyword, emotion=emotion)
+        total = self.db.get_images_count(processed=1, keyword=keyword, emotions=emotions, source_ids=source_ids)
         self.total_pages = max(1, (total + page_size - 1) // page_size)
         if page > self.total_pages:
             page = self.total_pages
@@ -181,7 +264,7 @@ class SearchTab:
 
         # 获取数据
         self.all_results = self.db.get_images_page(page=page, page_size=page_size, 
-                                                     processed=1, keyword=keyword, emotion=emotion)
+                                                     processed=1, keyword=keyword, emotions=emotions, source_ids=source_ids)
 
         # 🔥 动态计算列数和单元格尺寸
         try:

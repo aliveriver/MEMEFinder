@@ -20,6 +20,7 @@ class SourceTab:
         self.parent = parent
         self.db = db
         self.scanner = ImageScanner()
+        self.jump_to_search_callback = None  # 用于跳转到搜索页的回调
         
         # 创建主框架
         self.frame = ttk.Frame(parent)
@@ -68,10 +69,13 @@ class SourceTab:
         
         # 右键菜单
         self.source_menu = tk.Menu(self.frame, tearoff=0)
-        self.source_menu.add_command(label="打开文件夹", command=self.open_source_folder)
-        self.source_menu.add_command(label="启用/禁用", command=self.toggle_source)
+        self.source_menu.add_command(label="🖼️ 查看图源图片", command=self.view_source_images)
         self.source_menu.add_separator()
-        self.source_menu.add_command(label="删除", command=self.remove_source)
+        self.source_menu.add_command(label="📂 打开文件夹", command=self.open_source_folder)
+        self.source_menu.add_command(label="🔍 扫描该图源", command=self.scan_single_source)
+        self.source_menu.add_command(label="✅ 启用/禁用", command=self.toggle_source)
+        self.source_menu.add_separator()
+        self.source_menu.add_command(label="🗑️ 删除", command=self.remove_source)
         
         self.source_tree.bind("<Button-3>", self.show_source_menu)
         
@@ -173,6 +177,79 @@ class SourceTab:
             enabled = "✗" in status
             self.db.toggle_source(source_id, enabled)
             self.refresh_sources()
+    
+    def view_source_images(self):
+        """查看选中图源的图片（跳转到搜索页面）"""
+        selected = self.source_tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请先选择要查看的图源")
+            return
+        
+        # 获取所有选中的图源ID
+        source_ids = []
+        for item in selected:
+            source_id = int(self.source_tree.item(item)['text'])
+            source_ids.append(source_id)
+        
+        # 调用跳转回调
+        if self.jump_to_search_callback:
+            self.jump_to_search_callback(source_ids)
+        else:
+            messagebox.showinfo("提示", "搜索功能未初始化")
+    
+    def scan_single_source(self):
+        """扫描单个选中的图源"""
+        selected = self.source_tree.selection()
+        if not selected:
+            messagebox.showwarning("警告", "请先选择要扫描的图源")
+            return
+        
+        total_new = 0
+        for item in selected:
+            source_id = int(self.source_tree.item(item)['text'])
+            
+            # 获取图源信息
+            sources = self.db.get_sources()
+            source = next((s for s in sources if s['id'] == source_id), None)
+            
+            if not source:
+                continue
+            
+            folder_path = source['folder_path']
+            if not os.path.exists(folder_path):
+                messagebox.showwarning("警告", f"图源文件夹不存在：{folder_path}")
+                continue
+            
+            # 获取已存在的图片哈希
+            existing_hashes = self.db.get_image_hashes()
+            
+            # 查找新图片
+            new_images = self.scanner.find_new_images(folder_path, existing_hashes)
+            
+            # 批量添加
+            if new_images:
+                batch_data = [(str(img_path), img_hash, source_id) for img_path, img_hash in new_images]
+                added = self.db.add_images_batch(batch_data)
+                total_new += added
+            
+            self.db.update_scan_time(source_id)
+        
+        self.refresh_sources()
+        self.update_statistics()
+        messagebox.showinfo("完成", f"扫描完成！\n发现新图片: {total_new} 张")
+        
+        # 如果有新图片，切换到图片处理页
+        if total_new > 0:
+            try:
+                for tab_id in self.parent.tabs():
+                    try:
+                        if self.parent.tab(tab_id, 'text') == '图片处理':
+                            self.parent.select(tab_id)
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
     
     def scan_sources(self):
         """扫描图源中的新图片"""

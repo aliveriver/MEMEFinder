@@ -405,11 +405,14 @@ class ImageDatabase:
         logger.info(f"搜索图片: 关键词='{keyword}', 情绪='{emotion}', 结果={len(results)}张")
         return results
 
-    def get_images_count(self, processed: int = None, keyword: str = "", emotion: str = "") -> int:
+    def get_images_count(self, processed: int = None, keyword: str = "", emotion: str = "", 
+                        emotions: List[str] = None, source_ids: List[int] = None) -> int:
         """获取符合条件的图片总数（用于分页）
 
         Args:
             processed: 1 for 已处理，0 为未处理，None 表示全部
+            emotions: 情感列表，支持多选
+            source_ids: 图源ID列表，支持多图源筛选
         """
         with self.get_cursor() as cursor:
             query = "SELECT COUNT(*) FROM images WHERE 1=1"
@@ -420,24 +423,37 @@ class ImageDatabase:
             if keyword:
                 query += " AND (filtered_text LIKE ? OR ocr_text LIKE ?)"
                 params.extend([f"%{keyword}%", f"%{keyword}%"])
-            if emotion:
+            # 支持多选情感
+            if emotions:
+                placeholders = ','.join(['?' for _ in emotions])
+                query += f" AND emotion IN ({placeholders})"
+                params.extend(emotions)
+            elif emotion:  # 向后兼容单选
                 query += " AND emotion = ?"
                 params.append(emotion)
+            # 支持多图源筛选
+            if source_ids:
+                placeholders = ','.join(['?' for _ in source_ids])
+                query += f" AND source_id IN ({placeholders})"
+                params.extend(source_ids)
 
             cursor.execute(query, params)
             total = cursor.fetchone()[0]
         
-        logger.debug(f"统计图片数量: {total} 张 (processed={processed}, keyword='{keyword}', emotion='{emotion}')")
+        logger.debug(f"统计图片数量: {total} 张 (processed={processed}, keyword='{keyword}', emotion='{emotion}', emotions={emotions}, source_ids={source_ids})")
         return total
 
     def get_images_page(self, page: int = 1, page_size: int = 20, processed: int = None,
-                        keyword: str = "", emotion: str = "") -> List[Dict]:
+                        keyword: str = "", emotion: str = "", emotions: List[str] = None,
+                        source_ids: List[int] = None) -> List[Dict]:
         """分页获取图片数据，返回指定页的记录列表
 
         Args:
             page: 页码，从1开始
             page_size: 每页条数
             processed: 1/0/None 同 get_images_count
+            emotions: 情感列表，支持多选
+            source_ids: 图源ID列表，支持多图源筛选
         """
         offset = max(0, (page - 1) * page_size)
         
@@ -450,9 +466,19 @@ class ImageDatabase:
             if keyword:
                 query += " AND (filtered_text LIKE ? OR ocr_text LIKE ?)"
                 params.extend([f"%{keyword}%", f"%{keyword}%"])
-            if emotion:
+            # 支持多选情感
+            if emotions:
+                placeholders = ','.join(['?' for _ in emotions])
+                query += f" AND emotion IN ({placeholders})"
+                params.extend(emotions)
+            elif emotion:  # 向后兼容单选
                 query += " AND emotion = ?"
                 params.append(emotion)
+            # 支持多图源筛选
+            if source_ids:
+                placeholders = ','.join(['?' for _ in source_ids])
+                query += f" AND source_id IN ({placeholders})"
+                params.extend(source_ids)
 
             query += " ORDER BY added_time DESC LIMIT ? OFFSET ?"
             params.extend([page_size, offset])

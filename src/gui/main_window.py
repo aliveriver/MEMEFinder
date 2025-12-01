@@ -55,6 +55,9 @@ class MemeFinderGUI:
         self.process_tab = ProcessTab(self.notebook, self.db, stats_callback=self.source_tab.update_statistics)
         self.search_tab = SearchTab(self.notebook, self.db)
         
+        # 设置图源页的跳转回调
+        self.source_tab.jump_to_search_callback = self.jump_to_search_with_sources
+        
         # 添加到笔记本
         self.notebook.add(self.source_tab.frame, text="图源管理")
         self.notebook.add(self.process_tab.frame, text="图片处理")
@@ -179,3 +182,22 @@ class MemeFinderGUI:
                 self.db.set_app_state('processing_state', 'paused')
             except Exception:
                 pass
+    
+    def jump_to_search_with_sources(self, source_ids):
+        """跳转到搜索页并设置图源筛选"""
+        # 切换到搜索页
+        try:
+            self.notebook.select(self.search_tab.frame)
+        except Exception:
+            try:
+                tabs = self.notebook.tabs()
+                if len(tabs) >= 3:
+                    self.notebook.select(tabs[2])  # 搜索页是第3个标签页
+            except Exception:
+                pass
+        
+        # 设置图源筛选并触发搜索
+        try:
+            self.search_tab.set_source_filter(source_ids)
+        except Exception as e:
+            messagebox.showerror("错误", f"无法设置图源筛选: {e}")
