@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr:bin/env python
 # -*- coding: utf-8 -*-
 """
 图片搜索标签页 - Canvas+Widget混合架构（优化布局版本）
@@ -15,6 +15,150 @@ from tkinter import font as tkfont
 from PIL import Image, ImageTk
 
 from .. core. database import ImageDatabase
+
+
+class CheckboxDropdown:
+    """带复选框的下拉菜单控件"""
+    
+    def __init__(self, parent, options, default_text="请选择", callback=None, width=20):
+        """
+        Args:
+            parent: 父控件
+            options: 选项列表 [(显示文本, 值), ...]
+            default_text: 默认显示文本
+            callback: 选择变化时的回调函数
+            width: 按钮宽度
+        """
+        self.parent = parent
+        self.options = options
+        self.default_text = default_text
+        self.callback = callback
+        self.width = width
+        
+        # 存储选中状态
+        self.vars = {}  # {value: BooleanVar}
+        for label, value in options:
+            self.vars[value] = tk.BooleanVar(value=False)
+        
+        # 创建主按钮
+        self.button = ttk.Button(parent, text=default_text, command=self._toggle_menu, width=width)
+        
+        # 下拉菜单窗口（初始为None）
+        self.menu_window = None
+        self.is_open = False
+    
+    def pack(self, **kwargs):
+        self.button.pack(**kwargs)
+    
+    def grid(self, **kwargs):
+        self.button.grid(**kwargs)
+    
+    def _toggle_menu(self):
+        """切换下拉菜单显示/隐藏"""
+        if self.is_open:
+            self._close_menu()
+        else:
+            self._open_menu()
+    
+    def _open_menu(self):
+        """打开下拉菜单"""
+        if self.is_open:
+            return
+        
+        # 创建Toplevel窗口作为下拉菜单
+        self.menu_window = tk.Toplevel(self.parent)
+        self.menu_window.withdraw()  # 先隐藏
+        self.menu_window.overrideredirect(True)  # 去掉窗口边框
+        
+        # 创建框架
+        frame = ttk.Frame(self.menu_window, relief=tk.RAISED, borderwidth=1)
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 添加复选框
+        for label, value in self.options:
+            cb = ttk.Checkbutton(
+                frame, 
+                text=label, 
+                variable=self.vars[value],
+                command=self._on_selection_change
+            )
+            cb.pack(anchor=tk.W, padx=5, pady=2)
+        
+        # 添加"全选"和"清空"按钮
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Button(btn_frame, text="全选", command=self._select_all, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="清空", command=self._clear_all, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="确定", command=self._close_menu, width=8).pack(side=tk.LEFT, padx=2)
+        
+        # 计算位置（在按钮下方）
+        self.menu_window.update_idletasks()
+        x = self.button.winfo_rootx()
+        y = self.button.winfo_rooty() + self.button.winfo_height()
+        self.menu_window.geometry(f"+{x}+{y}")
+        
+        # 显示窗口
+        self.menu_window.deiconify()
+        self.is_open = True
+        
+        # 绑定点击外部关闭菜单
+        self.menu_window.bind("<FocusOut>", lambda e: self._close_menu())
+        self.menu_window.focus_set()
+    
+    def _close_menu(self):
+        """关闭下拉菜单"""
+        if self.menu_window:
+            self.menu_window.destroy()
+            self.menu_window = None
+        self.is_open = False
+        self._update_button_text()
+    
+    def _on_selection_change(self):
+        """选择变化时的处理"""
+        self._update_button_text()
+        if self.callback:
+            self.callback()
+    
+    def _update_button_text(self):
+        """更新按钮显示文本"""
+        selected = self.get_selected_values()
+        if not selected:
+            text = self.default_text
+        elif len(selected) == 1:
+            # 找到对应的显示文本
+            for label, value in self.options:
+                if value == selected[0]:
+                    text = label
+                    break
+            else:
+                text = selected[0]
+        else:
+            text = f"已选 {len(selected)} 项"
+        
+        self.button.config(text=text)
+    
+    def _select_all(self):
+        """全选"""
+        for var in self.vars.values():
+            var.set(True)
+        self._on_selection_change()
+    
+    def _clear_all(self):
+        """清空选择"""
+        for var in self.vars.values():
+            var.set(False)
+        self._on_selection_change()
+    
+    def get_selected_values(self):
+        """获取选中的值列表"""
+        return [value for value, var in self.vars.items() if var.get()]
+    
+    def set_selected_values(self, values):
+        """设置选中的值"""
+        for value, var in self.vars.items():
+            var.set(value in values)
+        self._update_button_text()
 
 
 class SearchTab:
@@ -43,6 +187,10 @@ class SearchTab:
         self.text_font = tkfont.Font(family="TkDefaultFont", size=9)
         self.emotion_font = tkfont.Font(family="TkDefaultFont", size=8)
         
+        # 多选筛选列表
+        self.selected_emotions = []  # 选中的情感列表
+        self.selected_sources = []   # 选中的图源ID列表
+        
         # 创建主框架
         self.frame = ttk.Frame(parent)
         self.create_widgets()
@@ -53,21 +201,42 @@ class SearchTab:
         search_frame = ttk. LabelFrame(self.frame, text="搜索条件", padding=10)
         search_frame.pack(fill=tk.X, padx=10, pady=10)
         
+        # 第一行：关键词
         ttk.Label(search_frame, text="关键词:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self. search_keyword = tk.StringVar()
         keyword_entry = ttk.Entry(search_frame, textvariable=self.search_keyword, width=40)
-        keyword_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        keyword_entry.grid(row=0, column=1, columnspan=3, sticky=tk.W, padx=5, pady=5)
         keyword_entry.bind('<Return>', lambda e: self.search_images())
-        
-        ttk.Label(search_frame, text="情绪:").grid(row=0, column=2, sticky=tk.W, padx=5, pady=5)
-        self. search_emotion = tk.StringVar()
-        emotion_combo = ttk.Combobox(search_frame, textvariable=self.search_emotion, 
-                                     values=['', '正向', '负向', '中性'], width=10, state='readonly')
-        emotion_combo.grid(row=0, column=3, sticky=tk. W, padx=5, pady=5)
-        emotion_combo.set('')
         
         ttk.Button(search_frame, text="🔍 搜索", command=self.search_images).grid(row=0, column=4, padx=5)
         ttk.Button(search_frame, text="🔄 刷新", command=self.refresh_page).grid(row=0, column=5, padx=5)
+        
+        # 第二行：情感多选下拉菜单
+        ttk.Label(search_frame, text="情绪:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        emotions = [('正向', '正向'), ('负向', '负向'), ('中性', '中性')]
+        self.emotion_dropdown = CheckboxDropdown(
+            search_frame, 
+            emotions, 
+            default_text="全部情绪",
+            callback=self._on_emotion_filter_change,
+            width=15
+        )
+        self.emotion_dropdown.grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
+        
+        # 第三行：图源多选下拉菜单
+        ttk.Label(search_frame, text="图源:").grid(row=1, column=2, sticky=tk.W, padx=5, pady=5)
+        # 先创建一个空的下拉菜单，稍后加载图源数据
+        self.source_dropdown = CheckboxDropdown(
+            search_frame,
+            [],  # 初始为空
+            default_text="全部图源",
+            callback=self._on_source_filter_change,
+            width=25
+        )
+        self.source_dropdown.grid(row=1, column=3, sticky=tk.W, padx=5, pady=5)
+        
+        # 加载图源列表
+        self._load_sources()
         
         # 结果列表区
         result_frame = ttk.LabelFrame(self.frame, text="搜索结果", padding=10)
@@ -137,11 +306,57 @@ class SearchTab:
         # 初始加载
         self.load_page()
     
+    def _load_sources(self):
+        """加载图源列表到下拉菜单"""
+        sources = self.db.get_sources()
+        
+        # 构建选项列表
+        options = []
+        for source in sources:
+            folder_path = source['folder_path']
+            # 显示文件夹名称（路径的最后部分）
+            folder_name = folder_path.split('\\')[-1] or folder_path.split('/')[-1] or folder_path
+            display_text = f"[{source['id']}] {folder_name}"
+            options.append((display_text, source['id']))
+        
+        # 重新创建下拉菜单
+        self.source_dropdown.options = options
+        self.source_dropdown.vars = {}
+        for label, value in options:
+            self.source_dropdown.vars[value] = tk.BooleanVar(value=False)
+        self.source_dropdown._update_button_text()
+    
+    def _on_emotion_filter_change(self):
+        """情感筛选变化回调"""
+        self.selected_emotions = self.emotion_dropdown.get_selected_values()
+        # 自动触发搜索
+        self.search_images()
+    
+    def _on_source_filter_change(self):
+        """图源筛选变化回调"""
+        self.selected_sources = self.source_dropdown.get_selected_values()
+        # 自动触发搜索
+        self.search_images()
+    
+    def set_source_filter(self, source_ids):
+        """从外部设置图源筛选（用于从图源页面跳转）"""
+        if not isinstance(source_ids, list):
+            source_ids = [source_ids]
+        
+        self.selected_sources = source_ids
+        
+        # 在下拉菜单中选中对应的项
+        self.source_dropdown.set_selected_values(source_ids)
+        
+        # 触发搜索
+        self.search_images()
+    
     def search_images(self):
         self.page_var.set(1)
         self.load_page()
     
     def refresh_page(self):
+        self._load_sources()  # 刷新图源列表
         self.load_page()
 
     def load_page(self):
@@ -156,7 +371,11 @@ class SearchTab:
         page = max(1, int(self.page_var.get()))
         page_size = int(self.page_size_var.get())
         keyword = self.search_keyword.get(). strip()
-        emotion = self. search_emotion.get()
+        
+        # 使用多选情感列表
+        emotions = self.selected_emotions if self.selected_emotions else None
+        # 使用多选图源列表
+        source_ids = self.selected_sources if self.selected_sources else None
  
         # 清空Canvas
         self.canvas.delete('all')
@@ -173,7 +392,7 @@ class SearchTab:
         self.frame.after(100, delayed_gc)
 
         # 计算总页数
-        total = self.db.get_images_count(processed=1, keyword=keyword, emotion=emotion)
+        total = self.db.get_images_count(processed=1, keyword=keyword, emotions=emotions, source_ids=source_ids)
         self.total_pages = max(1, (total + page_size - 1) // page_size)
         if page > self.total_pages:
             page = self.total_pages
@@ -181,7 +400,7 @@ class SearchTab:
 
         # 获取数据
         self.all_results = self.db.get_images_page(page=page, page_size=page_size, 
-                                                     processed=1, keyword=keyword, emotion=emotion)
+                                                     processed=1, keyword=keyword, emotions=emotions, source_ids=source_ids)
 
         # 🔥 动态计算列数和单元格尺寸
         try:
