@@ -142,6 +142,7 @@ class ImageDatabase:
                     emotion_negative REAL,
                     added_time TEXT NOT NULL,
                     processed INTEGER DEFAULT 0,
+                    is_favorite INTEGER DEFAULT 0,
                     FOREIGN KEY (source_id) REFERENCES image_sources(id)
                 )
             """)
@@ -161,6 +162,9 @@ class ImageDatabase:
             """)
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_filtered_text ON images(filtered_text)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_is_favorite ON images(is_favorite)
             """)
 
             # 应用状态表（用于持久化断点/恢复状态）
@@ -406,13 +410,14 @@ class ImageDatabase:
         return results
 
     def get_images_count(self, processed: int = None, keyword: str = "", emotion: str = "", 
-                        emotions: List[str] = None, source_ids: List[int] = None) -> int:
+                        emotions: List[str] = None, source_ids: List[int] = None, is_favorite: bool = None) -> int:
         """获取符合条件的图片总数（用于分页）
 
         Args:
             processed: 1 for 已处理，0 为未处理，None 表示全部
             emotions: 情感列表，支持多选
             source_ids: 图源ID列表，支持多图源筛选
+            is_favorite: True只显示收藏，False不显示收藏，None全部显示
         """
         with self.get_cursor() as cursor:
             query = "SELECT COUNT(*) FROM images WHERE 1=1"
@@ -436,16 +441,20 @@ class ImageDatabase:
                 placeholders = ','.join(['?' for _ in source_ids])
                 query += f" AND source_id IN ({placeholders})"
                 params.extend(source_ids)
+            # 支持收藏筛选
+            if is_favorite is not None:
+                query += " AND is_favorite = ?"
+                params.append(1 if is_favorite else 0)
 
             cursor.execute(query, params)
             total = cursor.fetchone()[0]
         
-        logger.debug(f"统计图片数量: {total} 张 (processed={processed}, keyword='{keyword}', emotion='{emotion}', emotions={emotions}, source_ids={source_ids})")
+        logger.debug(f"统计图片数量: {total} 张 (processed={processed}, keyword='{keyword}', emotion='{emotion}', emotions={emotions}, source_ids={source_ids}, is_favorite={is_favorite})")
         return total
 
     def get_images_page(self, page: int = 1, page_size: int = 20, processed: int = None,
                         keyword: str = "", emotion: str = "", emotions: List[str] = None,
-                        source_ids: List[int] = None) -> List[Dict]:
+                        source_ids: List[int] = None, is_favorite: bool = None) -> List[Dict]:
         """分页获取图片数据，返回指定页的记录列表
 
         Args:
@@ -454,11 +463,12 @@ class ImageDatabase:
             processed: 1/0/None 同 get_images_count
             emotions: 情感列表，支持多选
             source_ids: 图源ID列表，支持多图源筛选
+            is_favorite: True只显示收藏，False不显示收藏，None全部显示
         """
         offset = max(0, (page - 1) * page_size)
         
         with self.get_cursor() as cursor:
-            query = "SELECT id, file_path, filtered_text, emotion, emotion_positive, emotion_negative, processed FROM images WHERE 1=1"
+            query = "SELECT id, file_path, filtered_text, emotion, emotion_positive, emotion_negative, processed, is_favorite FROM images WHERE 1=1"
             params = []
             if processed is not None:
                 query += " AND processed = ?"
@@ -479,6 +489,10 @@ class ImageDatabase:
                 placeholders = ','.join(['?' for _ in source_ids])
                 query += f" AND source_id IN ({placeholders})"
                 params.extend(source_ids)
+            # 支持收藏筛选
+            if is_favorite is not None:
+                query += " AND is_favorite = ?"
+                params.append(1 if is_favorite else 0)
 
             query += " ORDER BY added_time DESC LIMIT ? OFFSET ?"
             params.extend([page_size, offset])
@@ -493,7 +507,8 @@ class ImageDatabase:
                     'emotion': row[3],
                     'pos_score': row[4],
                     'neg_score': row[5],
-                    'processed': bool(row[6])
+                    'processed': bool(row[6]),
+                    'is_favorite': bool(row[7])
                 })
         
         logger.debug(f"分页查询: 第{page}页, 每页{page_size}条, 返回{len(results)}条")
@@ -599,7 +614,7 @@ class ImageDatabase:
             cursor.execute("""
                 SELECT id, file_path, file_hash, source_id, ocr_text, 
                        filtered_text, emotion, emotion_positive, emotion_negative, 
-                       added_time, processed
+                       added_time, processed, is_favorite
                 FROM images
                 WHERE file_path = ?
             """, (file_path,))
@@ -620,7 +635,8 @@ class ImageDatabase:
                 'emotion_positive': row[7],
                 'emotion_negative': row[8],
                 'added_time': row[9],
-                'processed': bool(row[10])
+                'processed': bool(row[10]),
+                'is_favorite': bool(row[11])
             }
         
         logger.debug(f"获取图片详情: {file_path}")
@@ -663,6 +679,34 @@ class ImageDatabase:
                     return False
         except Exception as e:
             logger.error(f"更新OCR文本失败: {e}")
+            return False
+    
+    def update_favorite(self, file_path: str, is_favorite: bool) -> bool:
+        """更新图片的收藏状态
+        
+        Args:
+            file_path: 图片文件路径
+            is_favorite: 是否收藏
+            
+        Returns:
+            更新是否成功
+        """
+        try:
+            with self.get_cursor(commit=True) as cursor:
+                cursor.execute("""
+                    UPDATE images 
+                    SET is_favorite = ?
+                    WHERE file_path = ?
+                """, (1 if is_favorite else 0, file_path))
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"已{'收藏' if is_favorite else '取消收藏'}图片: {file_path}")
+                    return True
+                else:
+                    logger.warning(f"图片未找到，无法更新收藏状态: {file_path}")
+                    return False
+        except Exception as e:
+            logger.error(f"更新收藏状态失败: {e}")
             return False
     
     def close(self):

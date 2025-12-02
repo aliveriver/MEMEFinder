@@ -169,10 +169,17 @@ class SearchTab:
         self.db = db
         
         # Canvas Items 引用
-        self.canvas_items = {}  # {key: [img_id, text_id, emotion_id, bg_rect_id]}
+        self.canvas_items = {}  # {key: [img_id, text_id, emotion_id, bg_rect_id, checkbox_id, favorite_id]}
         self.image_refs = {}    # {key: PhotoImage}
         self.item_paths = {}    # {key: file_path}
         self.event_rects = {}   # {key: (x1, y1, x2, y2)} 事件区域
+        
+        # 多选相关
+        self.selected_items = set()  # 存储选中的图片file_path（不是key，这样翻页后状态保持）
+        self.last_clicked_index = None  # 最后点击的索引，用于shift多选
+        
+        # 收藏状态缓存 {file_path: is_favorite}
+        self.favorite_cache = {}
         
         # 延迟调度
         self._reload_after_id = None
@@ -235,6 +242,16 @@ class SearchTab:
             width=25
         )
         self.source_dropdown.grid(row=1, column=3, sticky=tk.W, padx=5, pady=5)
+        
+        # 收藏筛选
+        self.favorite_filter_var = tk.BooleanVar(value=False)
+        favorite_cb = ttk.Checkbutton(
+            search_frame,
+            text="❤ 只看收藏",
+            variable=self.favorite_filter_var,
+            command=self._on_favorite_filter_change
+        )
+        favorite_cb.grid(row=1, column=4, sticky=tk.W, padx=5, pady=5)
         
         # 加载图源列表
         self._load_sources()
@@ -763,6 +780,11 @@ class SearchTab:
         # 自动触发搜索
         self.search_images()
     
+    def _on_favorite_filter_change(self):
+        """收藏筛选变化回调"""
+        # 自动触发搜索
+        self.search_images()
+    
     def set_source_filter(self, source_ids):
         """从外部设置图源筛选（用于从图源页面跳转）"""
         if not isinstance(source_ids, list):
@@ -801,6 +823,8 @@ class SearchTab:
         emotions = self.selected_emotions if self.selected_emotions else None
         # 使用多选图源列表
         source_ids = self.selected_sources if self.selected_sources else None
+        # 获取收藏筛选
+        is_favorite = True if self.favorite_filter_var.get() else None
  
         # 清空Canvas
         self.canvas.delete('all')
@@ -811,13 +835,17 @@ class SearchTab:
         self.item_paths.clear()
         self.event_rects.clear()
         
+        # 注意：不清空selected_items，这样翻页后选中状态会保持
+        # self.selected_items.clear()
+        # self.last_clicked_index = None
+        
         # 延迟GC
         def delayed_gc():
             gc. collect()
         self.frame.after(100, delayed_gc)
 
         # 计算总页数
-        total = self.db.get_images_count(processed=1, keyword=keyword, emotions=emotions, source_ids=source_ids)
+        total = self.db.get_images_count(processed=1, keyword=keyword, emotions=emotions, source_ids=source_ids, is_favorite=is_favorite)
         self.total_pages = max(1, (total + page_size - 1) // page_size)
         if page > self.total_pages:
             page = self.total_pages
@@ -825,7 +853,7 @@ class SearchTab:
 
         # 获取数据
         self.all_results = self.db.get_images_page(page=page, page_size=page_size, 
-                                                     processed=1, keyword=keyword, emotions=emotions, source_ids=source_ids)
+                                                     processed=1, keyword=keyword, emotions=emotions, source_ids=source_ids, is_favorite=is_favorite)
 
         # 🔥 动态计算列数和单元格尺寸
         try:
@@ -1013,6 +1041,10 @@ class SearchTab:
                 self.item_paths.clear()
                 self.event_rects.clear()
                 
+                # 注意：不清空selected_items，保持选中状态
+                # self.selected_items.clear()
+                # self.last_clicked_index = None
+                
                 # 立即渲染可见项目
                 self._render_visible_items()
             else:
@@ -1195,6 +1227,63 @@ class SearchTab:
             )
             items.append(emotion_id)
             
+            # 🔥 5. 绘制右上角复选框
+            checkbox_size = 16  # 缩小尺寸使其更精致
+            checkbox_x = cell_x + self.cell_width - 8 - checkbox_size
+            checkbox_y = cell_y + 8
+            
+            # 复选框背景（圆角矩形）
+            checkbox_bg = self.canvas.create_rectangle(
+                checkbox_x, checkbox_y,
+                checkbox_x + checkbox_size, checkbox_y + checkbox_size,
+                fill='white',
+                outline='#999',
+                width=2,
+                tags=(key, f'{key}_checkbox')
+            )
+            items.append(checkbox_bg)
+            
+            # 如果选中，绘制勾选标记（使用file_path判断）
+            if file_path in self.selected_items:
+                check_mark = self.canvas.create_text(
+                    checkbox_x + checkbox_size // 2,
+                    checkbox_y + checkbox_size // 2,
+                    text='✓',
+                    fill='#1976d2',
+                    font=('TkDefaultFont', 12, 'bold'),
+                    tags=(key, f'{key}_checkbox')
+                )
+                items.append(check_mark)
+            
+            # 🔥 6. 绘制左上角爱心图标
+            heart_size = 20
+            heart_x = cell_x + 8
+            heart_y = cell_y + 8
+            
+            # 获取收藏状态
+            is_favorite = result.get('is_favorite', False)
+            self.favorite_cache[file_path] = is_favorite
+            
+            # 绘制爱心（使用更美观的样式）
+            if is_favorite:
+                heart_text = '❤'  # 实心红色爱心
+                heart_color = '#ff4757'  # 更鲜艳的红色
+                heart_font = ('Segoe UI Emoji', 16, 'normal')  # 使用Emoji字体
+            else:
+                heart_text = '♥'  # 使用实心黑桃符号作为空心效果
+                heart_color = '#dfe4ea'  # 浅灰色
+                heart_font = ('Segoe UI Emoji', 16, 'normal')
+            
+            heart_id = self.canvas.create_text(
+                heart_x + heart_size // 2,
+                heart_y + heart_size // 2,
+                text=heart_text,
+                fill=heart_color,
+                font=heart_font,
+                tags=(key, f'{key}_favorite')
+            )
+            items.append(heart_id)
+            
             # 保存
             self.canvas_items[key] = items
             self.item_paths[key] = file_path
@@ -1254,22 +1343,185 @@ class SearchTab:
                 return key
         return None
     
+    def _is_click_on_checkbox(self, key, x, y):
+        """判断点击是否在复选框区域"""
+        if key not in self.event_rects:
+            return False
+        
+        canvas_x = self.canvas.canvasx(x)
+        canvas_y = self.canvas.canvasy(y)
+        
+        x1, y1, x2, y2 = self.event_rects[key]
+        
+        # 复选框位置：右上角
+        checkbox_size = 16
+        checkbox_x = x2 - 8 - checkbox_size
+        checkbox_y = y1 + 3
+        
+        return (checkbox_x <= canvas_x <= checkbox_x + checkbox_size and
+                checkbox_y <= canvas_y <= checkbox_y + checkbox_size)
+    
+    def _is_click_on_favorite(self, key, x, y):
+        """判断点击是否在爱心区域"""
+        if key not in self.event_rects:
+            return False
+        
+        canvas_x = self.canvas.canvasx(x)
+        canvas_y = self.canvas.canvasy(y)
+        
+        x1, y1, x2, y2 = self.event_rects[key]
+        
+        # 爱心位置：左上角
+        heart_size = 20
+        heart_x = x1 + 3
+        heart_y = y1 + 3
+        
+        return (heart_x <= canvas_x <= heart_x + heart_size and
+                heart_y <= canvas_y <= heart_y + heart_size)
+    
+    def _toggle_selection(self, key):
+        """切换选中状态"""
+        if key not in self.item_paths:
+            return
+        
+        file_path = self.item_paths[key]
+        if file_path in self.selected_items:
+            self.selected_items.remove(file_path)
+        else:
+            self.selected_items.add(file_path)
+        
+        # 重新渲染该项以更新复选框显示
+        self._update_checkbox_display(key)
+    
+    def _update_checkbox_display(self, key):
+        """更新复选框显示状态"""
+        if key not in self.canvas_items:
+            return
+        
+        # 找到复选框相关的canvas item
+        items_to_delete = []
+        for item_id in self.canvas.find_withtag(f'{key}_checkbox'):
+            items_to_delete.append(item_id)
+        
+        for item_id in items_to_delete:
+            self.canvas.delete(item_id)
+        
+        # 重新绘制复选框
+        if key not in self.event_rects:
+            return
+        
+        x1, y1, x2, y2 = self.event_rects[key]
+        checkbox_size = 16
+        checkbox_x = x2 - 8 - checkbox_size
+        checkbox_y = y1 + 3
+        
+        # 绘制背景
+        checkbox_bg = self.canvas.create_rectangle(
+            checkbox_x, checkbox_y,
+            checkbox_x + checkbox_size, checkbox_y + checkbox_size,
+            fill='white',
+            outline='#999',
+            width=2,
+            tags=(key, f'{key}_checkbox')
+        )
+        
+        # 如果选中，绘制勾选标记（使用file_path判断）
+        file_path = self.item_paths.get(key)
+        if file_path and file_path in self.selected_items:
+            check_mark = self.canvas.create_text(
+                checkbox_x + checkbox_size // 2,
+                checkbox_y + checkbox_size // 2,
+                text='✓',
+                fill='#1976d2',
+                font=('TkDefaultFont', 12, 'bold'),
+                tags=(key, f'{key}_checkbox')
+            )
+    
+    def _toggle_favorite(self, key):
+        """切换收藏状态"""
+        if key not in self.item_paths:
+            return
+        
+        file_path = self.item_paths[key]
+        current_state = self.favorite_cache.get(file_path, False)
+        new_state = not current_state
+        
+        # 更新数据库
+        if self.db.update_favorite(file_path, new_state):
+            self.favorite_cache[file_path] = new_state
+            # 更新UI显示
+            self._update_favorite_display(key, new_state)
+    
+    def _update_favorite_display(self, key, is_favorite):
+        """更新爱心图标显示"""
+        if key not in self.canvas_items:
+            return
+        
+        # 删除旧的爱心图标
+        items_to_delete = []
+        for item_id in self.canvas.find_withtag(f'{key}_favorite'):
+            items_to_delete.append(item_id)
+        
+        for item_id in items_to_delete:
+            self.canvas.delete(item_id)
+        
+        # 重新绘制爱心
+        if key not in self.event_rects:
+            return
+        
+        x1, y1, x2, y2 = self.event_rects[key]
+        heart_size = 20
+        heart_x = x1 + 3
+        heart_y = y1 + 3
+        
+        if is_favorite:
+            heart_text = '❤'
+            heart_color = '#ff4757'
+            heart_font = ('Segoe UI Emoji', 16, 'normal')
+        else:
+            heart_text = '♥'
+            heart_color = '#dfe4ea'
+            heart_font = ('Segoe UI Emoji', 16, 'normal')
+        
+        heart_id = self.canvas.create_text(
+            heart_x + heart_size // 2,
+            heart_y + heart_size // 2,
+            text=heart_text,
+            fill=heart_color,
+            font=heart_font,
+            tags=(key, f'{key}_favorite')
+        )
+    
     def _on_mouse_motion(self, event):
-        """鼠标移动 - 悬停高亮"""
+        """鼠标移动 - 悬停高亮和提示"""
         key = self._get_item_at_pos(event.x, event.y)
         
+        # 更新悬停高亮
         if key != self._hover_item:
             # 恢复旧的
-            if self._hover_item and self._hover_item in self. canvas_items:
+            if self._hover_item and self._hover_item in self.canvas_items:
                 bg_rect = self.canvas_items[self._hover_item][0]
-                self.canvas. itemconfig(bg_rect, fill='white', outline='#ddd', width=1)
+                self.canvas.itemconfig(bg_rect, fill='white', outline='#ddd', width=1)
             
             # 高亮新的
             if key and key in self.canvas_items:
-                bg_rect = self. canvas_items[key][0]
+                bg_rect = self.canvas_items[key][0]
                 self.canvas.itemconfig(bg_rect, fill='#e3f2fd', outline='#1976d2', width=2)
             
             self._hover_item = key
+        
+        # 更新鼠标指针样式
+        if key:
+            # 检查是否在复选框或爱心上
+            if self._is_click_on_checkbox(key, event.x, event.y):
+                self.canvas.config(cursor='hand2')
+            elif self._is_click_on_favorite(key, event.x, event.y):
+                self.canvas.config(cursor='hand2')
+                # 显示提示（可以考虑添加tooltip）
+            else:
+                self.canvas.config(cursor='')
+        else:
+            self.canvas.config(cursor='')
     
     def _on_mouse_leave(self, event):
         """鼠标离开Canvas"""
@@ -1285,11 +1537,72 @@ class SearchTab:
             self.open_file(self.item_paths[key])
     
     def _on_single_click(self, event):
-        """单击显示图片详情"""
+        """单击处理 - 支持多选、收藏、详情显示"""
         key = self._get_item_at_pos(event.x, event.y)
-        if key and key in self.item_paths:
-            file_path = self.item_paths[key]
-            self._show_image_detail(file_path)
+        if not key or key not in self.item_paths:
+            return
+        
+        # 获取索引
+        try:
+            idx = int(key.split('_')[-1])
+        except:
+            idx = None
+        
+        # 检查是否点击在爱心上（爱心优先级最高，不受Ctrl/Shift影响）
+        if self._is_click_on_favorite(key, event.x, event.y):
+            self._toggle_favorite(key)
+            return
+        
+        # 检查是否点击在复选框上
+        is_on_checkbox = self._is_click_on_checkbox(key, event.x, event.y)
+        
+        # Shift+点击：范围选择（在复选框上或图片上都可以触发）
+        if event.state & 0x0001:  # Shift键
+            if self.last_clicked_index is not None and idx is not None:
+                # 获取范围内的所有项
+                start = min(self.last_clicked_index, idx)
+                end = max(self.last_clicked_index, idx)
+                
+                range_items = []
+                for i in range(start, end + 1):
+                    if i < len(self.all_results):
+                        r = i // self.cols
+                        c = i % self.cols
+                        item_key = f"{r}_{c}_{i}"
+                        if item_key in self.item_paths:
+                            range_items.append((item_key, self.item_paths[item_key]))
+                
+                # 检查范围内是否全部已选中
+                all_selected = all(file_path in self.selected_items for _, file_path in range_items)
+                
+                # 如果全部已选中，则取消选中；否则全部选中
+                for item_key, file_path in range_items:
+                    if all_selected:
+                        self.selected_items.discard(file_path)
+                    else:
+                        self.selected_items.add(file_path)
+                    self._update_checkbox_display(item_key)
+            else:
+                # 如果没有起始点，将当前点作为起始点
+                self.last_clicked_index = idx
+            return
+        
+        # Ctrl+点击：切换选中状态（在复选框上或图片上都可以触发）
+        if event.state & 0x0004:  # Ctrl键
+            self._toggle_selection(key)
+            self.last_clicked_index = idx
+            return
+        
+        # 普通点击复选框：切换选中状态
+        if is_on_checkbox:
+            self._toggle_selection(key)
+            self.last_clicked_index = idx
+            return
+        
+        # 普通点击图片：显示详情
+        file_path = self.item_paths[key]
+        self._show_image_detail(file_path)
+        self.last_clicked_index = idx
     
     def _on_right_click(self, event):
         """右键菜单"""
