@@ -177,6 +177,7 @@ class SearchTab:
         # 延迟调度
         self._reload_after_id = None
         self._scroll_after_id = None
+        self._configure_after_id = None
         
         # 虚拟化列表变量
         self. all_results = []
@@ -238,28 +239,57 @@ class SearchTab:
         # 加载图源列表
         self._load_sources()
         
-        # 结果列表区
+        # 结果列表区 - 使用PanedWindow分割左右布局
         result_frame = ttk.LabelFrame(self.frame, text="搜索结果", padding=10)
         result_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        # 创建PanedWindow用于分割左右区域
+        self.paned_window = ttk.PanedWindow(result_frame, orient=tk.HORIZONTAL)
+        self.paned_window.pack(fill=tk.BOTH, expand=True)
+        
+        # 左侧：图片列表
+        left_frame = ttk.Frame(self.paned_window)
+        self.paned_window.add(left_frame, weight=3)
 
         # 滚动条
-        vsb = ttk.Scrollbar(result_frame, orient=tk.VERTICAL)
+        vsb = ttk.Scrollbar(left_frame, orient=tk.VERTICAL)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         
         # Canvas 用于渲染图片和文本
-        self.canvas = tk.Canvas(result_frame, yscrollcommand=vsb. set, bg='white')
+        self.canvas = tk.Canvas(left_frame, yscrollcommand=vsb.set, bg='white')
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        vsb.configure(command=self.canvas.yview)
+        
+        # 配置滚动条，并在滚动时触发渲染
+        def on_yview_scroll(*args):
+            self.canvas.yview(*args)
+            # 延迟渲染可见项
+            if hasattr(self, '_scroll_after_id') and self._scroll_after_id:
+                try:
+                    self.frame.after_cancel(self._scroll_after_id)
+                except:
+                    pass
+            self._scroll_after_id = self.frame.after(30, self._render_visible_items)
+        vsb.configure(command=on_yview_scroll)
+        
+        # 右侧：详情面板
+        self.detail_frame = ttk.Frame(self.paned_window, width=350)
+        self.paned_window.add(self.detail_frame, weight=1)
+        
+        # 创建详情面板内容
+        self._create_detail_panel()
 
         # 绑定Canvas事件
         self.canvas.bind('<MouseWheel>', self._on_mousewheel)
         self.canvas.bind('<Button-4>', self._on_mousewheel)
         self.canvas.bind('<Button-5>', self._on_mousewheel)
-        self.canvas.bind('<Configure>', self._on_canvas_scroll)
+        self.canvas.bind('<Configure>', self._on_canvas_configure)
         
         # 绑定右键菜单和双击
         self.canvas.bind('<Button-3>', self._on_right_click)
         self.canvas.bind('<Double-Button-1>', self._on_double_click)
+        
+        # 绑定单击事件显示详情
+        self.canvas.bind('<Button-1>', self._on_single_click)
         
         # 绑定悬停效果
         self.canvas.bind('<Motion>', self._on_mouse_motion)
@@ -306,6 +336,401 @@ class SearchTab:
         # 初始加载
         self.load_page()
     
+    def _create_detail_panel(self):
+        """创建右侧详情面板"""
+        # 使用Canvas+Scrollbar实现可滚动的详情面板
+        self.detail_canvas = tk.Canvas(self.detail_frame, bg='white', highlightthickness=0)
+        detail_scrollbar = ttk.Scrollbar(self.detail_frame, orient=tk.VERTICAL, command=self.detail_canvas.yview)
+        
+        self.detail_content_frame = ttk.Frame(self.detail_canvas)
+        
+        # 创建窗口
+        self.detail_canvas_window = self.detail_canvas.create_window((0, 0), window=self.detail_content_frame, anchor='nw')
+        self.detail_canvas.configure(yscrollcommand=detail_scrollbar.set)
+        
+        # 布局
+        detail_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.detail_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # 更新滚动区域 - 当内容变化时
+        def _configure_scroll_region(event):
+            # 更新滚动区域
+            self.detail_canvas.update_idletasks()
+            bbox = self.detail_canvas.bbox("all")
+            if bbox:
+                # 获取Canvas的实际高度
+                canvas_height = self.detail_canvas.winfo_height()
+                content_height = bbox[3] - bbox[1]  # 内容高度
+                
+                # 只在内容高度超过Canvas高度时设置滚动区域
+                if content_height > canvas_height:
+                    self.detail_canvas.configure(scrollregion=bbox)
+                else:
+                    # 内容不足，禁用滚动
+                    self.detail_canvas.configure(scrollregion=(0, 0, bbox[2], canvas_height))
+                    # 重置滚动位置到顶部
+                    self.detail_canvas.yview_moveto(0)
+        self.detail_content_frame.bind("<Configure>", _configure_scroll_region)
+        
+        # 自适应宽度 - 当Canvas大小变化时
+        def _configure_canvas_width(event):
+            # 只在宽度真正改变时更新
+            canvas_width = event.width
+            canvas_height = event.height
+            if canvas_width > 1:  # 确保有效宽度
+                self.detail_canvas.itemconfig(self.detail_canvas_window, width=canvas_width)
+                # 强制更新布局
+                self.detail_canvas.update_idletasks()
+                
+                # 重新计算滚动区域
+                bbox = self.detail_canvas.bbox("all")
+                if bbox:
+                    content_height = bbox[3] - bbox[1]
+                    if content_height > canvas_height:
+                        self.detail_canvas.configure(scrollregion=bbox)
+                    else:
+                        self.detail_canvas.configure(scrollregion=(0, 0, bbox[2], canvas_height))
+                        self.detail_canvas.yview_moveto(0)
+        self.detail_canvas.bind("<Configure>", _configure_canvas_width)
+        
+        # 绑定鼠标滚轮到详情面板
+        def _on_detail_mousewheel(event):
+            try:
+                if event.num == 4:
+                    delta = -1
+                elif event.num == 5:
+                    delta = 1
+                else:
+                    delta = -1 * int(event.delta / 120)
+                self.detail_canvas.yview_scroll(delta, 'units')
+            except:
+                pass
+        
+        # 绑定滚轮事件到Canvas和内容Frame
+        self.detail_canvas.bind('<MouseWheel>', _on_detail_mousewheel)
+        self.detail_canvas.bind('<Button-4>', _on_detail_mousewheel)
+        self.detail_canvas.bind('<Button-5>', _on_detail_mousewheel)
+        self.detail_content_frame.bind('<MouseWheel>', _on_detail_mousewheel)
+        self.detail_content_frame.bind('<Button-4>', _on_detail_mousewheel)
+        self.detail_content_frame.bind('<Button-5>', _on_detail_mousewheel)
+        
+        # 默认显示提示信息
+        self._show_no_selection()
+    
+    def _show_no_selection(self):
+        """显示未选择图片的提示"""
+        # 清空详情面板
+        for widget in self.detail_content_frame.winfo_children():
+            widget.destroy()
+        
+        hint_label = ttk.Label(
+            self.detail_content_frame, 
+            text="请点击左侧图片查看详情", 
+            font=('TkDefaultFont', 10),
+            foreground='gray'
+        )
+        hint_label.pack(pady=50)
+        self._bind_mousewheel_to_widget(hint_label)
+    
+    def _show_image_detail(self, file_path: str):
+        """显示图片详细信息
+        
+        Args:
+            file_path: 图片文件路径
+        """
+        # 清空详情面板
+        for widget in self.detail_content_frame.winfo_children():
+            widget.destroy()
+        
+        # 从数据库获取详细信息
+        detail = self.db.get_image_detail(file_path)
+        if not detail:
+            error_label = ttk.Label(
+                self.detail_content_frame,
+                text="无法获取图片信息",
+                foreground='red'
+            )
+            error_label.pack(pady=20)
+            self._bind_mousewheel_to_widget(error_label)
+            return
+        
+        # 创建详情显示区域
+        padding = 10
+        
+        # 1. 标题
+        title_label = ttk.Label(
+            self.detail_content_frame,
+            text="图片详情",
+            font=('TkDefaultFont', 12, 'bold')
+        )
+        title_label.pack(pady=(padding, 5), anchor='w', padx=padding)
+        self._bind_mousewheel_to_widget(title_label)
+        
+        sep1 = ttk.Separator(self.detail_content_frame, orient=tk.HORIZONTAL)
+        sep1.pack(fill=tk.X, pady=5, padx=padding)
+        self._bind_mousewheel_to_widget(sep1)
+        
+        # 2. 缩略图
+        thumb_label = ttk.Label(self.detail_content_frame, text="缩略图:")
+        thumb_label.pack(pady=(10, 5), anchor='w', padx=padding)
+        self._bind_mousewheel_to_widget(thumb_label)
+        
+        try:
+            if os.path.exists(file_path):
+                img = Image.open(file_path)
+                img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+                
+                # 转换为RGB
+                if img.mode in ('RGBA', 'LA', 'P'):
+                    background = Image.new('RGB', img.size, (255, 255, 255))
+                    if img.mode == 'P':
+                        img = img.convert('RGBA')
+                    background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+                    img.close()
+                    img = background
+                elif img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                photo = ImageTk.PhotoImage(img)
+                img_label = ttk.Label(self.detail_content_frame, image=photo)
+                img_label.image = photo  # 保持引用
+                img_label.pack(pady=5, padx=padding)
+                self._bind_mousewheel_to_widget(img_label)
+            else:
+                no_img_label = ttk.Label(self.detail_content_frame, text="(图片文件不存在)", foreground='red')
+                no_img_label.pack(pady=5, padx=padding)
+                self._bind_mousewheel_to_widget(no_img_label)
+        except Exception as e:
+            error_img_label = ttk.Label(self.detail_content_frame, text=f"(无法加载图片: {e})", foreground='red')
+            error_img_label.pack(pady=5, padx=padding)
+            self._bind_mousewheel_to_widget(error_img_label)
+        
+        sep2 = ttk.Separator(self.detail_content_frame, orient=tk.HORIZONTAL)
+        sep2.pack(fill=tk.X, pady=10, padx=padding)
+        self._bind_mousewheel_to_widget(sep2)
+        
+        # 3. 文件名称（昵称）
+        filename = os.path.basename(file_path)
+        self._create_info_row("文件名称:", filename, selectable=True)
+        
+        # 4. 绝对路径（可点击）
+        path_frame = ttk.Frame(self.detail_content_frame)
+        path_frame.pack(fill=tk.X, pady=5, padx=padding)
+        self._bind_mousewheel_to_widget(path_frame)
+        
+        path_label = ttk.Label(path_frame, text="文件路径:", font=('TkDefaultFont', 9, 'bold'))
+        path_label.pack(anchor='w')
+        self._bind_mousewheel_to_widget(path_label)
+        
+        path_text = tk.Text(path_frame, height=2, wrap=tk.WORD, font=('TkDefaultFont', 8))
+        path_text.insert('1.0', file_path)
+        path_text.config(state=tk.DISABLED, bg='#f0f0f0')
+        path_text.pack(fill=tk.X, pady=2)
+        self._bind_mousewheel_to_widget(path_text)
+        
+        open_folder_btn = ttk.Button(
+            path_frame,
+            text="📁 在资源管理器中打开",
+            command=lambda: self.open_folder(file_path)
+        )
+        open_folder_btn.pack(pady=2)
+        self._bind_mousewheel_to_widget(open_folder_btn)
+        
+        # 5. 添加时间（文件创建时间）
+        try:
+            import time
+            file_time = os.path.getctime(file_path)
+            file_time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(file_time))
+        except:
+            file_time_str = "未知"
+        self._create_info_row("添加时间:", file_time_str)
+        
+        # 6. 扫描时间（数据库添加时间）
+        scan_time = detail.get('added_time', '未知')
+        if scan_time and scan_time != '未知':
+            try:
+                # 格式化ISO时间
+                from datetime import datetime
+                dt = datetime.fromisoformat(scan_time)
+                scan_time = dt.strftime('%Y-%m-%d %H:%M:%S')
+            except:
+                pass
+        self._create_info_row("扫描时间:", scan_time)
+        
+        sep3 = ttk.Separator(self.detail_content_frame, orient=tk.HORIZONTAL)
+        sep3.pack(fill=tk.X, pady=10, padx=padding)
+        self._bind_mousewheel_to_widget(sep3)
+        
+        # 7. OCR结果（可编辑）
+        ocr_frame = ttk.Frame(self.detail_content_frame)
+        ocr_frame.pack(fill=tk.BOTH, expand=True, pady=5, padx=padding)
+        self._bind_mousewheel_to_widget(ocr_frame)
+        
+        ocr_label = ttk.Label(ocr_frame, text="OCR识别结果:", font=('TkDefaultFont', 9, 'bold'))
+        ocr_label.pack(anchor='w')
+        self._bind_mousewheel_to_widget(ocr_label)
+        
+        self.ocr_text_widget = tk.Text(ocr_frame, height=8, wrap=tk.WORD, font=('TkDefaultFont', 9))
+        self.ocr_text_widget.insert('1.0', detail.get('ocr_text', ''))
+        self.ocr_text_widget.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        # 为OCR文本框设置智能滚轮绑定
+        def _on_ocr_mousewheel(event):
+            # 只有在文本框获得焦点时才使用自己的滚动
+            if self.ocr_text_widget.focus_get() == self.ocr_text_widget:
+                # 文本框有焦点，检查是否需要滚动
+                try:
+                    # 如果内容少，直接滚动详情面板
+                    visible_lines = int(self.ocr_text_widget.cget('height'))
+                    total_lines = int(self.ocr_text_widget.index('end-1c').split('.')[0])
+                    
+                    if total_lines <= visible_lines:
+                        # 内容不足，滚动详情面板
+                        self._scroll_detail_panel(event)
+                        return 'break'  # 阻止事件传播
+                    else:
+                        # 内容多，检查是否到达边界
+                        # 获取滚动方向
+                        if hasattr(event, 'delta'):
+                            scroll_up = event.delta > 0
+                        elif hasattr(event, 'num'):
+                            scroll_up = event.num == 4
+                        else:
+                            return 'break'
+                        
+                        if scroll_up:  # 向上滚
+                            # 检查是否在顶部
+                            if float(self.ocr_text_widget.yview()[0]) <= 0:
+                                self._scroll_detail_panel(event)
+                                return 'break'
+                            else:
+                                # 滚动文本框
+                                self.ocr_text_widget.yview_scroll(-1, 'units')
+                                return 'break'
+                        else:  # 向下滚
+                            # 检查是否在底部
+                            if float(self.ocr_text_widget.yview()[1]) >= 1:
+                                self._scroll_detail_panel(event)
+                                return 'break'
+                            else:
+                                # 滚动文本框
+                                self.ocr_text_widget.yview_scroll(1, 'units')
+                                return 'break'
+                except:
+                    # 出错时滚动详情面板
+                    self._scroll_detail_panel(event)
+                    return 'break'
+            else:
+                # 文本框没有焦点，滚动详情面板
+                self._scroll_detail_panel(event)
+                return 'break'  # 阻止事件传播
+        
+        self.ocr_text_widget.bind('<MouseWheel>', _on_ocr_mousewheel)
+        self.ocr_text_widget.bind('<Button-4>', _on_ocr_mousewheel)
+        self.ocr_text_widget.bind('<Button-5>', _on_ocr_mousewheel)
+        
+        # 保存按钮
+        save_btn = ttk.Button(
+            ocr_frame,
+            text="💾 保存OCR修改",
+            command=lambda: self._save_ocr_changes(file_path)
+        )
+        save_btn.pack(pady=5)
+        self._bind_mousewheel_to_widget(save_btn)
+        
+        # 8. 情绪标签
+        emotion = detail.get('emotion', '未分类')
+        emotion_color = {'正向': 'green', '负向': 'red', '中性': 'blue'}.get(emotion, 'gray')
+        
+        emotion_frame = ttk.Frame(self.detail_content_frame)
+        emotion_frame.pack(fill=tk.X, pady=5, padx=padding)
+        self._bind_mousewheel_to_widget(emotion_frame)
+        
+        emotion_label1 = ttk.Label(emotion_frame, text="情绪标签:", font=('TkDefaultFont', 9, 'bold'))
+        emotion_label1.pack(side=tk.LEFT)
+        self._bind_mousewheel_to_widget(emotion_label1)
+        
+        emotion_label2 = ttk.Label(
+            emotion_frame, 
+            text=emotion,
+            foreground=emotion_color,
+            font=('TkDefaultFont', 10, 'bold')
+        )
+        emotion_label2.pack(side=tk.LEFT, padx=10)
+        self._bind_mousewheel_to_widget(emotion_label2)
+        
+        # 情绪分数
+        if detail.get('emotion_positive') is not None and detail.get('emotion_negative') is not None:
+            score_text = f"(正向: {detail['emotion_positive']:.2f}, 负向: {detail['emotion_negative']:.2f})"
+            score_label = ttk.Label(emotion_frame, text=score_text, font=('TkDefaultFont', 8))
+            score_label.pack(side=tk.LEFT)
+            self._bind_mousewheel_to_widget(score_label)
+    
+    def _bind_mousewheel_to_widget(self, widget):
+        """为控件绑定鼠标滚轮事件，使其滚动详情面板
+        
+        Args:
+            widget: 要绑定的控件
+        """
+        def _on_mousewheel(event):
+            self._scroll_detail_panel(event)
+        
+        widget.bind('<MouseWheel>', _on_mousewheel)
+        widget.bind('<Button-4>', _on_mousewheel)
+        widget.bind('<Button-5>', _on_mousewheel)
+    
+    def _scroll_detail_panel(self, event):
+        """滚动详情面板的通用方法"""
+        try:
+            if event.num == 4:
+                delta = -1
+            elif event.num == 5:
+                delta = 1
+            else:
+                delta = -1 * int(event.delta / 120)
+            self.detail_canvas.yview_scroll(delta, 'units')
+        except:
+            pass
+    
+    def _create_info_row(self, label_text: str, value_text: str, selectable: bool = False):
+        """创建信息行
+        
+        Args:
+            label_text: 标签文本
+            value_text: 值文本
+            selectable: 是否可选择（用Text显示）
+        """
+        frame = ttk.Frame(self.detail_content_frame)
+        frame.pack(fill=tk.X, pady=5, padx=10)
+        self._bind_mousewheel_to_widget(frame)
+        
+        label = ttk.Label(frame, text=label_text, font=('TkDefaultFont', 9, 'bold'))
+        label.pack(anchor='w')
+        self._bind_mousewheel_to_widget(label)
+        
+        if selectable:
+            text_widget = tk.Text(frame, height=1, wrap=tk.NONE, font=('TkDefaultFont', 9))
+            text_widget.insert('1.0', value_text)
+            text_widget.config(state=tk.DISABLED, bg='#f0f0f0')
+            text_widget.pack(fill=tk.X, pady=2)
+            self._bind_mousewheel_to_widget(text_widget)
+        else:
+            value = ttk.Label(frame, text=value_text, font=('TkDefaultFont', 9))
+            value.pack(anchor='w', pady=2)
+            self._bind_mousewheel_to_widget(value)
+    
+    def _save_ocr_changes(self, file_path: str):
+        """保存OCR文本修改"""
+        new_ocr_text = self.ocr_text_widget.get('1.0', tk.END).strip()
+        
+        success = self.db.update_image_ocr(file_path, new_ocr_text)
+        if success:
+            messagebox.showinfo("成功", "OCR文本已保存")
+            # 刷新页面以更新显示
+            self.load_page()
+        else:
+            messagebox.showerror("错误", "保存OCR文本失败")
+
     def _load_sources(self):
         """加载图源列表到下拉菜单"""
         sources = self.db.get_sources()
@@ -425,6 +850,9 @@ class SearchTab:
 
         self.update_pager()
         self._render_visible_items()
+        
+        # 强制更新Canvas以触发Configure事件
+        self.canvas.update_idletasks()
 
     def _calculate_cell_height(self, thumb_side):
         """🔥 精确计算单元格高度"""
@@ -517,6 +945,14 @@ class SearchTab:
         except:
             delta = -1 * int(getattr(event, 'delta', 0))
         self.canvas.yview_scroll(int(delta / 120), 'units')
+        
+        # 滚动后延迟渲染
+        if hasattr(self, '_scroll_after_id') and self._scroll_after_id:
+            try:
+                self.frame.after_cancel(self._scroll_after_id)
+            except:
+                pass
+        self._scroll_after_id = self.frame.after(30, self._render_visible_items)
 
     # ========== Canvas 虚拟化渲染 ==========
     
@@ -533,16 +969,58 @@ class SearchTab:
         except:
             return 0, 10
     
-    def _on_canvas_scroll(self, event=None):
-        """滚动回调"""
-        if hasattr(self, '_scroll_after_id') and self._scroll_after_id:
+    def _on_canvas_configure(self, event=None):
+        """Canvas大小变化回调 - 重新计算列数并渲染"""
+        if hasattr(self, '_configure_after_id') and self._configure_after_id:
             try:
-                self.frame.after_cancel(self._scroll_after_id)
+                self.frame.after_cancel(self._configure_after_id)
             except:
                 pass
         
-        # Canvas渲染可以更激进：30ms延迟
-        self._scroll_after_id = self.frame. after(30, self._render_visible_items)
+        # 延迟处理，避免频繁计算
+        self._configure_after_id = self.frame.after(100, self._handle_canvas_resize)
+    
+    def _handle_canvas_resize(self):
+        """处理Canvas大小变化"""
+        self._configure_after_id = None
+        
+        if not self.all_results:
+            return
+        
+        # 重新计算列数
+        try:
+            canvas_width = max(400, self.canvas.winfo_width())
+            thumb_side = int(self.thumb_size_var.get())
+            cell_width = thumb_side + self.thumb_padding
+            new_cols = max(1, canvas_width // cell_width)
+            
+            # 如果列数改变，需要重新布局
+            if new_cols != self.cols:
+                self.cols = new_cols
+                self.cell_width = cell_width
+                
+                # 重新设置滚动区域
+                total_rows = (len(self.all_results) + self.cols - 1) // self.cols
+                total_height = total_rows * self.cell_height + 50
+                self.canvas.configure(scrollregion=(0, 0, canvas_width, total_height))
+                
+                # 清空Canvas
+                self.canvas.delete('all')
+                
+                # 清空并重新渲染所有项目
+                self.canvas_items.clear()
+                self.image_refs.clear()
+                self.item_paths.clear()
+                self.event_rects.clear()
+                
+                # 立即渲染可见项目
+                self._render_visible_items()
+            else:
+                # 即使列数没变，也要检查是否需要渲染新的项目
+                # （比如滚动后窗口变大，可能有新的区域需要渲染）
+                self._render_visible_items()
+        except Exception as e:
+            pass
     
     def _truncate_text(self, text, max_width, max_lines=2):
         """🔥 截断文本确保不超过指定行数和宽度"""
@@ -805,6 +1283,13 @@ class SearchTab:
         key = self._get_item_at_pos(event.x, event.y)
         if key and key in self.item_paths:
             self.open_file(self.item_paths[key])
+    
+    def _on_single_click(self, event):
+        """单击显示图片详情"""
+        key = self._get_item_at_pos(event.x, event.y)
+        if key and key in self.item_paths:
+            file_path = self.item_paths[key]
+            self._show_image_detail(file_path)
     
     def _on_right_click(self, event):
         """右键菜单"""

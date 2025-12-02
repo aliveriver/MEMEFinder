@@ -586,6 +586,85 @@ class ImageDatabase:
         logger.info(f"清理旧数据: 删除了 {deleted} 条 {days} 天前的记录")
         return deleted
     
+    def get_image_detail(self, file_path: str) -> Optional[Dict]:
+        """获取单个图片的详细信息
+        
+        Args:
+            file_path: 图片文件路径
+            
+        Returns:
+            包含图片详细信息的字典，如果不存在返回None
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, file_path, file_hash, source_id, ocr_text, 
+                       filtered_text, emotion, emotion_positive, emotion_negative, 
+                       added_time, processed
+                FROM images
+                WHERE file_path = ?
+            """, (file_path,))
+            row = cursor.fetchone()
+            
+            if not row:
+                logger.warning(f"图片未找到: {file_path}")
+                return None
+            
+            detail = {
+                'id': row[0],
+                'file_path': row[1],
+                'file_hash': row[2],
+                'source_id': row[3],
+                'ocr_text': row[4] or '',
+                'filtered_text': row[5] or '',
+                'emotion': row[6] or '未分类',
+                'emotion_positive': row[7],
+                'emotion_negative': row[8],
+                'added_time': row[9],
+                'processed': bool(row[10])
+            }
+        
+        logger.debug(f"获取图片详情: {file_path}")
+        return detail
+    
+    def update_image_ocr(self, file_path: str, new_ocr_text: str, 
+                        update_filtered: bool = True) -> bool:
+        """更新图片的OCR文本
+        
+        Args:
+            file_path: 图片文件路径
+            new_ocr_text: 新的OCR文本
+            update_filtered: 是否同时更新filtered_text（默认True）
+            
+        Returns:
+            更新是否成功
+        """
+        try:
+            with self.get_cursor(commit=True) as cursor:
+                if update_filtered:
+                    # 同时更新filtered_text（与ocr_text相同）
+                    cursor.execute("""
+                        UPDATE images 
+                        SET ocr_text = ?, filtered_text = ?
+                        WHERE file_path = ?
+                    """, (new_ocr_text, new_ocr_text, file_path))
+                else:
+                    # 只更新ocr_text
+                    cursor.execute("""
+                        UPDATE images 
+                        SET ocr_text = ?
+                        WHERE file_path = ?
+                    """, (new_ocr_text, file_path))
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"更新OCR文本成功: {file_path}")
+                    return True
+                else:
+                    logger.warning(f"更新OCR文本失败，图片未找到: {file_path}")
+                    return False
+        except Exception as e:
+            logger.error(f"更新OCR文本失败: {e}")
+            return False
+    
     def close(self):
         """关闭数据库连接池"""
         self.pool.close_all()
