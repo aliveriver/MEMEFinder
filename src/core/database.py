@@ -143,6 +143,7 @@ class ImageDatabase:
                     added_time TEXT NOT NULL,
                     processed INTEGER DEFAULT 0,
                     is_favorite INTEGER DEFAULT 0,
+                    emotion_manual INTEGER DEFAULT 0,
                     FOREIGN KEY (source_id) REFERENCES image_sources(id)
                 )
             """)
@@ -468,7 +469,7 @@ class ImageDatabase:
         offset = max(0, (page - 1) * page_size)
         
         with self.get_cursor() as cursor:
-            query = "SELECT id, file_path, filtered_text, emotion, emotion_positive, emotion_negative, processed, is_favorite FROM images WHERE 1=1"
+            query = "SELECT id, file_path, filtered_text, emotion, emotion_positive, emotion_negative, processed, is_favorite, source_id, emotion_manual FROM images WHERE 1=1"
             params = []
             if processed is not None:
                 query += " AND processed = ?"
@@ -508,7 +509,9 @@ class ImageDatabase:
                     'pos_score': row[4],
                     'neg_score': row[5],
                     'processed': bool(row[6]),
-                    'is_favorite': bool(row[7])
+                    'is_favorite': bool(row[7]),
+                    'source_id': row[8],
+                    'emotion_manual': bool(row[9])
                 })
         
         logger.debug(f"分页查询: 第{page}页, 每页{page_size}条, 返回{len(results)}条")
@@ -614,7 +617,7 @@ class ImageDatabase:
             cursor.execute("""
                 SELECT id, file_path, file_hash, source_id, ocr_text, 
                        filtered_text, emotion, emotion_positive, emotion_negative, 
-                       added_time, processed, is_favorite
+                       added_time, processed, is_favorite, emotion_manual
                 FROM images
                 WHERE file_path = ?
             """, (file_path,))
@@ -636,7 +639,8 @@ class ImageDatabase:
                 'emotion_negative': row[8],
                 'added_time': row[9],
                 'processed': bool(row[10]),
-                'is_favorite': bool(row[11])
+                'is_favorite': bool(row[11]),
+                'emotion_manual': bool(row[12])
             }
         
         logger.debug(f"获取图片详情: {file_path}")
@@ -707,6 +711,44 @@ class ImageDatabase:
                     return False
         except Exception as e:
             logger.error(f"更新收藏状态失败: {e}")
+            return False
+    
+    def update_emotion(self, file_path: str, emotion: str, manual: bool = True) -> bool:
+        """更新图片的情绪标签
+        
+        Args:
+            file_path: 图片文件路径
+            emotion: 情绪标签（正向/负向/中性）
+            manual: 是否手动修改（默认True，手动修改不保留得分）
+            
+        Returns:
+            更新是否成功
+        """
+        try:
+            with self.get_cursor(commit=True) as cursor:
+                if manual:
+                    # 手动修改：清空得分，设置manual标记
+                    cursor.execute("""
+                        UPDATE images 
+                        SET emotion = ?, emotion_positive = NULL, emotion_negative = NULL, emotion_manual = 1
+                        WHERE file_path = ?
+                    """, (emotion, file_path))
+                else:
+                    # 自动识别：保留得分，清除manual标记
+                    cursor.execute("""
+                        UPDATE images 
+                        SET emotion = ?, emotion_manual = 0
+                        WHERE file_path = ?
+                    """, (emotion, file_path))
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"已更新图片情绪为: {emotion} ({'手动' if manual else '自动'}): {file_path}")
+                    return True
+                else:
+                    logger.warning(f"图片未找到，无法更新情绪: {file_path}")
+                    return False
+        except Exception as e:
+            logger.error(f"更新情绪失败: {e}")
             return False
     
     def close(self):

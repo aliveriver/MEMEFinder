@@ -474,14 +474,40 @@ class SearchTab:
         # 创建详情显示区域
         padding = 10
         
-        # 1. 标题
+        # 1. 标题行（包含收藏状态）
+        title_frame = ttk.Frame(self.detail_content_frame)
+        title_frame.pack(fill=tk.X, pady=(padding, 5), padx=padding)
+        self._bind_mousewheel_to_widget(title_frame)
+        
         title_label = ttk.Label(
-            self.detail_content_frame,
+            title_frame,
             text="图片详情",
             font=('TkDefaultFont', 12, 'bold')
         )
-        title_label.pack(pady=(padding, 5), anchor='w', padx=padding)
+        title_label.pack(side=tk.LEFT)
         self._bind_mousewheel_to_widget(title_label)
+        
+        # 收藏状态（爱心图标）
+        is_favorite = detail.get('is_favorite', False)
+        # 使用 ttk.Style 获取默认背景色，或使用 SystemButtonFace
+        try:
+            style = ttk.Style()
+            default_bg = style.lookup('TFrame', 'background')
+        except:
+            default_bg = 'SystemButtonFace'
+        
+        favorite_btn = tk.Button(
+            title_frame,
+            text='❤' if is_favorite else '♥',
+            font=('Segoe UI Emoji', 16, 'normal'),
+            fg='#ff4757' if is_favorite else '#dfe4ea',
+            bd=0,
+            bg=default_bg,
+            cursor='hand2',
+            command=lambda: self._toggle_detail_favorite(file_path, favorite_btn)
+        )
+        favorite_btn.pack(side=tk.RIGHT, padx=5)
+        self._bind_mousewheel_to_widget(favorite_btn)
         
         sep1 = ttk.Separator(self.detail_content_frame, orient=tk.HORIZONTAL)
         sep1.pack(fill=tk.X, pady=5, padx=padding)
@@ -529,6 +555,20 @@ class SearchTab:
         # 3. 文件名称（昵称）
         filename = os.path.basename(file_path)
         self._create_info_row("文件名称:", filename, selectable=True)
+        
+        # 3.5. 所属图源
+        source_id = detail.get('source_id')
+        if source_id:
+            sources = self.db.get_sources()
+            source_info = next((s for s in sources if s['id'] == source_id), None)
+            if source_info:
+                source_path = source_info['folder_path']
+                source_name = source_path.split('\\')[-1] or source_path.split('/')[-1] or source_path
+                self._create_info_row("所属图源:", f"[{source_id}] {source_name}")
+            else:
+                self._create_info_row("所属图源:", f"图源ID: {source_id}")
+        else:
+            self._create_info_row("所属图源:", "未知")
         
         # 4. 绝对路径（可点击）
         path_frame = ttk.Frame(self.detail_content_frame)
@@ -655,8 +695,9 @@ class SearchTab:
         save_btn.pack(pady=5)
         self._bind_mousewheel_to_widget(save_btn)
         
-        # 8. 情绪标签
+        # 8. 情绪标签（可编辑）
         emotion = detail.get('emotion', '未分类')
+        emotion_manual = detail.get('emotion_manual', False)
         emotion_color = {'正向': 'green', '负向': 'red', '中性': 'blue'}.get(emotion, 'gray')
         
         emotion_frame = ttk.Frame(self.detail_content_frame)
@@ -664,23 +705,51 @@ class SearchTab:
         self._bind_mousewheel_to_widget(emotion_frame)
         
         emotion_label1 = ttk.Label(emotion_frame, text="情绪标签:", font=('TkDefaultFont', 9, 'bold'))
-        emotion_label1.pack(side=tk.LEFT)
+        emotion_label1.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
         self._bind_mousewheel_to_widget(emotion_label1)
         
-        emotion_label2 = ttk.Label(
-            emotion_frame, 
-            text=emotion,
-            foreground=emotion_color,
-            font=('TkDefaultFont', 10, 'bold')
+        # 情绪下拉选择
+        self.emotion_var = tk.StringVar(value=emotion)
+        emotion_combo = ttk.Combobox(
+            emotion_frame,
+            textvariable=self.emotion_var,
+            values=['正向', '负向', '中性', '未分类'],
+            state='readonly',
+            width=10
         )
-        emotion_label2.pack(side=tk.LEFT, padx=10)
-        self._bind_mousewheel_to_widget(emotion_label2)
+        emotion_combo.grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
+        self._bind_mousewheel_to_widget(emotion_combo)
         
-        # 情绪分数
-        if detail.get('emotion_positive') is not None and detail.get('emotion_negative') is not None:
-            score_text = f"(正向: {detail['emotion_positive']:.2f}, 负向: {detail['emotion_negative']:.2f})"
-            score_label = ttk.Label(emotion_frame, text=score_text, font=('TkDefaultFont', 8))
-            score_label.pack(side=tk.LEFT)
+        # 保存情绪按钮
+        save_emotion_btn = ttk.Button(
+            emotion_frame,
+            text="💾 保存",
+            command=lambda: self._save_emotion_changes(file_path, emotion_combo)
+        )
+        save_emotion_btn.grid(row=0, column=2, padx=(0, 10))
+        self._bind_mousewheel_to_widget(save_emotion_btn)
+        
+        # 标记是否手动修改
+        if emotion_manual:
+            manual_label = ttk.Label(
+                emotion_frame,
+                text="(手动)",
+                foreground='orange',
+                font=('TkDefaultFont', 8)
+            )
+            manual_label.grid(row=0, column=3)
+            self._bind_mousewheel_to_widget(manual_label)
+        
+        # 情绪分数（只显示自动识别的）
+        if not emotion_manual and detail.get('emotion_positive') is not None and detail.get('emotion_negative') is not None:
+            score_text = f"正向: {detail['emotion_positive']:.2f}, 负向: {detail['emotion_negative']:.2f}"
+            score_label = ttk.Label(
+                emotion_frame,
+                text=score_text,
+                font=('TkDefaultFont', 8),
+                foreground='gray'
+            )
+            score_label.grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
             self._bind_mousewheel_to_widget(score_label)
     
     def _bind_mousewheel_to_widget(self, widget):
@@ -747,6 +816,43 @@ class SearchTab:
             self.load_page()
         else:
             messagebox.showerror("错误", "保存OCR文本失败")
+    
+    def _toggle_detail_favorite(self, file_path: str, btn):
+        """切换详情面板中的收藏状态"""
+        # 获取当前状态
+        current_state = self.favorite_cache.get(file_path, False)
+        new_state = not current_state
+        
+        # 更新数据库
+        if self.db.update_favorite(file_path, new_state):
+            # 更新缓存
+            self.favorite_cache[file_path] = new_state
+            
+            # 更新按钮显示
+            btn.config(
+                text='❤' if new_state else '♥',
+                fg='#ff4757' if new_state else '#dfe4ea'
+            )
+            
+            # 找到并更新列表中对应项的爱心图标
+            for key, path in self.item_paths.items():
+                if path == file_path:
+                    self._update_favorite_display(key, new_state)
+                    break
+    
+    def _save_emotion_changes(self, file_path: str, combo):
+        """保存情绪标签修改"""
+        new_emotion = combo.get()
+        
+        # 手动修改，不保留得分
+        success = self.db.update_emotion(file_path, new_emotion, manual=True)
+        if success:
+            messagebox.showinfo("成功", "情绪标签已保存")
+            # 刷新详情面板和列表显示
+            self._show_image_detail(file_path)
+            self.load_page()
+        else:
+            messagebox.showerror("错误", "保存情绪标签失败")
 
     def _load_sources(self):
         """加载图源列表到下拉菜单"""
@@ -1260,9 +1366,12 @@ class SearchTab:
             heart_x = cell_x + 8
             heart_y = cell_y + 8
             
-            # 获取收藏状态
-            is_favorite = result.get('is_favorite', False)
-            self.favorite_cache[file_path] = is_favorite
+            # 获取收藏状态（优先从缓存读取，保证实时更新）
+            if file_path in self.favorite_cache:
+                is_favorite = self.favorite_cache[file_path]
+            else:
+                is_favorite = result.get('is_favorite', False)
+                self.favorite_cache[file_path] = is_favorite
             
             # 绘制爱心（使用更美观的样式）
             if is_favorite:
