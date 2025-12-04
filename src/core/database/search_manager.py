@@ -63,51 +63,65 @@ class SearchManager:
 
     def get_images_count(self, processed: int = None, keyword: str = "", emotion: str = "", 
                         emotions: List[str] = None, source_ids: List[int] = None, 
-                        is_favorite: bool = None) -> int:
+                        tag_ids: List[int] = None, is_favorite: bool = None) -> int:
         """获取符合条件的图片总数（用于分页）
 
         Args:
             processed: 1 for 已处理，0 为未处理，None 表示全部
             emotions: 情感列表，支持多选
             source_ids: 图源ID列表，支持多图源筛选
+            tag_ids: 标签ID列表，支持多标签筛选
             is_favorite: True只显示收藏，False不显示收藏，None全部显示
         """
         with self.get_cursor() as cursor:
-            query = "SELECT COUNT(*) FROM images WHERE 1=1"
+            # 如果有标签筛选，需要 JOIN image_tags 表
+            if tag_ids:
+                query = "SELECT COUNT(DISTINCT i.id) FROM images i INNER JOIN image_tags it ON i.id = it.image_id WHERE 1=1"
+            else:
+                query = "SELECT COUNT(*) FROM images WHERE 1=1"
+            
             params = []
+            
+            # 标签筛选
+            if tag_ids:
+                placeholders = ','.join(['?' for _ in tag_ids])
+                query += f" AND it.tag_id IN ({placeholders})"
+                params.extend(tag_ids)
+            
             if processed is not None:
-                query += " AND processed = ?"
+                query += " AND processed = ?" if not tag_ids else " AND i.processed = ?"
                 params.append(processed)
             if keyword:
-                query += " AND (filtered_text LIKE ? OR ocr_text LIKE ?)"
+                query += " AND (filtered_text LIKE ? OR ocr_text LIKE ?)" if not tag_ids else " AND (i.filtered_text LIKE ? OR i.ocr_text LIKE ?)"
                 params.extend([f"%{keyword}%", f"%{keyword}%"])
             # 支持多选情感
             if emotions:
                 placeholders = ','.join(['?' for _ in emotions])
-                query += f" AND emotion IN ({placeholders})"
+                query += f" AND emotion IN ({placeholders})" if not tag_ids else f" AND i.emotion IN ({placeholders})"
                 params.extend(emotions)
             elif emotion:  # 向后兼容单选
-                query += " AND emotion = ?"
+                query += " AND emotion = ?" if not tag_ids else " AND i.emotion = ?"
                 params.append(emotion)
             # 支持多图源筛选
             if source_ids:
                 placeholders = ','.join(['?' for _ in source_ids])
-                query += f" AND source_id IN ({placeholders})"
+                query += f" AND source_id IN ({placeholders})" if not tag_ids else f" AND i.source_id IN ({placeholders})"
                 params.extend(source_ids)
             # 支持收藏筛选
             if is_favorite is not None:
-                query += " AND is_favorite = ?"
+                query += " AND is_favorite = ?" if not tag_ids else " AND i.is_favorite = ?"
                 params.append(1 if is_favorite else 0)
 
             cursor.execute(query, params)
             total = cursor.fetchone()[0]
         
-        logger.debug(f"统计图片数量: {total} 张 (processed={processed}, keyword='{keyword}', emotion='{emotion}', emotions={emotions}, source_ids={source_ids}, is_favorite={is_favorite})")
+        logger.debug(f"统计图片数量: {total} 张 (processed={processed}, keyword='{keyword}', emotion='{emotion}', emotions={emotions}, source_ids={source_ids}, tag_ids={tag_ids}, is_favorite={is_favorite})")
         return total
 
     def get_images_page(self, page: int = 1, page_size: int = 20, processed: int = None,
                         keyword: str = "", emotion: str = "", emotions: List[str] = None,
-                        source_ids: List[int] = None, is_favorite: bool = None) -> List[Dict]:
+                        source_ids: List[int] = None, tag_ids: List[int] = None, 
+                        is_favorite: bool = None) -> List[Dict]:
         """分页获取图片数据，返回指定页的记录列表
 
         Args:
@@ -116,38 +130,51 @@ class SearchManager:
             processed: 1/0/None 同 get_images_count
             emotions: 情感列表，支持多选
             source_ids: 图源ID列表，支持多图源筛选
+            tag_ids: 标签ID列表，支持多标签筛选
             is_favorite: True只显示收藏，False不显示收藏，None全部显示
         """
         offset = max(0, (page - 1) * page_size)
         
         with self.get_cursor() as cursor:
-            query = "SELECT id, file_path, filtered_text, emotion, emotion_positive, emotion_negative, processed, is_favorite, source_id, emotion_manual FROM images WHERE 1=1"
+            # 如果有标签筛选，需要 JOIN image_tags 表
+            if tag_ids:
+                query = "SELECT DISTINCT i.id, i.file_path, i.filtered_text, i.emotion, i.emotion_positive, i.emotion_negative, i.processed, i.is_favorite, i.source_id, i.emotion_manual FROM images i INNER JOIN image_tags it ON i.id = it.image_id WHERE 1=1"
+            else:
+                query = "SELECT id, file_path, filtered_text, emotion, emotion_positive, emotion_negative, processed, is_favorite, source_id, emotion_manual FROM images WHERE 1=1"
+            
             params = []
+            
+            # 标签筛选
+            if tag_ids:
+                placeholders = ','.join(['?' for _ in tag_ids])
+                query += f" AND it.tag_id IN ({placeholders})"
+                params.extend(tag_ids)
+            
             if processed is not None:
-                query += " AND processed = ?"
+                query += " AND processed = ?" if not tag_ids else " AND i.processed = ?"
                 params.append(processed)
             if keyword:
-                query += " AND (filtered_text LIKE ? OR ocr_text LIKE ?)"
+                query += " AND (filtered_text LIKE ? OR ocr_text LIKE ?)" if not tag_ids else " AND (i.filtered_text LIKE ? OR i.ocr_text LIKE ?)"
                 params.extend([f"%{keyword}%", f"%{keyword}%"])
             # 支持多选情感
             if emotions:
                 placeholders = ','.join(['?' for _ in emotions])
-                query += f" AND emotion IN ({placeholders})"
+                query += f" AND emotion IN ({placeholders})" if not tag_ids else f" AND i.emotion IN ({placeholders})"
                 params.extend(emotions)
             elif emotion:  # 向后兼容单选
-                query += " AND emotion = ?"
+                query += " AND emotion = ?" if not tag_ids else " AND i.emotion = ?"
                 params.append(emotion)
             # 支持多图源筛选
             if source_ids:
                 placeholders = ','.join(['?' for _ in source_ids])
-                query += f" AND source_id IN ({placeholders})"
+                query += f" AND source_id IN ({placeholders})" if not tag_ids else f" AND i.source_id IN ({placeholders})"
                 params.extend(source_ids)
             # 支持收藏筛选
             if is_favorite is not None:
-                query += " AND is_favorite = ?"
+                query += " AND is_favorite = ?" if not tag_ids else " AND i.is_favorite = ?"
                 params.append(1 if is_favorite else 0)
 
-            query += " ORDER BY added_time DESC LIMIT ? OFFSET ?"
+            query += " ORDER BY added_time DESC LIMIT ? OFFSET ?" if not tag_ids else " ORDER BY i.added_time DESC LIMIT ? OFFSET ?"
             params.extend([page_size, offset])
 
             cursor.execute(query, params)
