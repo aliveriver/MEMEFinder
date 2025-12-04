@@ -13,6 +13,7 @@ from .checkbox_dropdown import CheckboxDropdown
 from .detail_panel import DetailPanel
 from .canvas_renderer import CanvasRenderer
 from .event_handlers import EventHandlers
+from .context_menu import ContextMenu
 
 
 class SearchTab:
@@ -156,6 +157,18 @@ class SearchTab:
             show_detail_func=self._show_image_detail
         )
         
+        # 初始化上下文菜单
+        self.context_menu = ContextMenu(
+            self.frame,
+            self.db,
+            get_selected_items_func=lambda: self.selected_items,
+            get_favorite_cache_func=lambda: self.favorite_cache,
+            refresh_callback=self.refresh_page
+        )
+        
+        # 将上下文菜单附加到事件处理器
+        self.event_handler.context_menu = self.context_menu
+        
         # 绑定事件
         self.canvas.bind('<MouseWheel>', self.event_handler.on_mousewheel)
         self.canvas.bind('<Button-4>', self.event_handler.on_mousewheel)
@@ -264,6 +277,8 @@ class SearchTab:
         """刷新页面"""
         self._load_sources()
         self.load_page()
+        # 刷新详情面板（如果正在显示某张图片）
+        self.detail_panel.refresh()
     
     def load_page(self):
         """加载当前页"""
@@ -304,6 +319,13 @@ class SearchTab:
             keyword=keyword, emotions=emotions, source_ids=source_ids,
             is_favorite=is_favorite
         )
+        
+        # 重新加载favorite_cache，确保收藏状态是最新的
+        self.favorite_cache = {}
+        for result in self.all_results:
+            file_path = result['file_path']
+            is_fav = result.get('is_favorite', False)
+            self.favorite_cache[file_path] = bool(is_fav)
         
         # 计算布局
         try:
