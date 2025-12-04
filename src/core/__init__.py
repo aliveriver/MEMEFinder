@@ -4,7 +4,7 @@
 核心模块
 """
 
-from .database import ImageDatabase
+from .database.database import ImageDatabase
 from .scanner import ImageScanner
 from .ocr import OCRProcessor
 
