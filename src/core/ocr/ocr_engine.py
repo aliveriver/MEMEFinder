@@ -74,12 +74,20 @@ class OCREngine:
             }
             
             # 初始化 RapidOCR
+            logger.info(f"[OCR引擎] 初始化RapidOCR (GPU加速: {'启用' if self.use_gpu else '禁用'})")
+            if self.use_gpu:
+                logger.debug("[OCR引擎] 尝试使用CUDA加速进行OCR识别...")
+            
             self.ocr = RapidOCR(**rapidocr_kwargs)
             
             if self.ocr is None:
                 raise Exception("RapidOCR 初始化返回 None")
             
             logger.info("✓ OCR模型加载成功")
+            if self.use_gpu:
+                logger.info("[OCR引擎] ✓ GPU加速已启用并加载成功")
+            else:
+                logger.info("[OCR引擎] CPU模式已启用")
             return True
             
         except Exception as e:

@@ -16,16 +16,29 @@ def has_nvidia_gpu() -> bool:
     Returns:
         bool: 是否有NVIDIA GPU硬件
     """
+    from ..utils.logger import get_logger
+    logger = get_logger()
+    
     try:
         import subprocess
+        logger.debug("[GPU检测] 开始检测NVIDIA GPU硬件...")
         result = subprocess.run(
             ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
             capture_output=True,
             text=True,
             timeout=2
         )
-        return result.returncode == 0 and result.stdout.strip()
-    except:
+        if result.returncode == 0 and result.stdout.strip():
+            logger.info(f"[GPU检测] ✓ 检测到NVIDIA GPU: {result.stdout.strip()}")
+            return True
+        else:
+            logger.debug("[GPU检测] ✗ nvidia-smi未返回GPU信息")
+            return False
+    except FileNotFoundError:
+        logger.debug("[GPU检测] ✗ 未找到nvidia-smi命令（可能未安装NVIDIA驱动）")
+        return False
+    except Exception as e:
+        logger.debug(f"[GPU检测] ✗ 检测GPU硬件时出错: {e}")
         return False
 
 
@@ -36,12 +49,110 @@ def has_onnxruntime_gpu() -> bool:
     Returns:
         bool: 是否安装onnxruntime-gpu
     """
+    from ..utils.logger import get_logger
+    logger = get_logger()
+    
     try:
+        logger.debug("[GPU检测] 检查ONNXRuntime CUDA支持...")
         import onnxruntime as ort
+        logger.debug(f"[GPU检测] ONNXRuntime版本: {ort.__version__}")
+        logger.debug(f"[GPU检测] ONNXRuntime路径: {ort.__file__}")
+        
         providers = ort.get_available_providers()
-        return 'CUDAExecutionProvider' in providers
-    except:
+        logger.debug(f"[GPU检测] 可用Providers: {', '.join(providers)}")
+        
+        if 'CUDAExecutionProvider' in providers:
+            logger.info("[GPU检测] ✓ CUDAExecutionProvider可用")
+            
+            # 检查CUDA DLL路径
+            _check_cuda_dlls(logger)
+            
+            return True
+        else:
+            logger.warning("[GPU检测] ✗ CUDAExecutionProvider不可用")
+            logger.warning("[GPU检测]    可能原因: 1) 缺少CUDA运行时DLL 2) onnxruntime版本不支持")
+            
+            # 诊断CUDA DLL问题
+            _diagnose_cuda_dlls(logger)
+            
+            return False
+    except ImportError as e:
+        logger.error(f"[GPU检测] ✗ 无法导入onnxruntime: {e}")
         return False
+    except Exception as e:
+        logger.error(f"[GPU检测] ✗ 检查ONNXRuntime时出错: {e}")
+        return False
+
+
+def _check_cuda_dlls(logger):
+    """检查CUDA DLL的路径（当GPU可用时）"""
+    try:
+        import os
+        cuda_path = os.environ.get('CUDA_PATH', '')
+        if cuda_path:
+            logger.debug(f"[GPU检测] CUDA_PATH环境变量: {cuda_path}")
+        
+        # 检查PATH中是否有CUDA
+        path_env = os.environ.get('PATH', '')
+        cuda_in_path = [p for p in path_env.split(os.pathsep) if 'cuda' in p.lower()]
+        if cuda_in_path:
+            logger.debug(f"[GPU检测] PATH中的CUDA路径: {cuda_in_path[0]}")
+    except Exception as e:
+        logger.debug(f"[GPU检测] 检查CUDA DLL路径时出错: {e}")
+
+
+def _diagnose_cuda_dlls(logger):
+    """诊断CUDA DLL问题（当GPU不可用时）"""
+    try:
+        import os
+        import sys
+        
+        logger.debug("[GPU检测] 开始诊断CUDA DLL问题...")
+        
+        # 1. 检查CUDA_PATH环境变量
+        cuda_path = os.environ.get('CUDA_PATH', '')
+        if cuda_path:
+            logger.debug(f"[GPU检测]   CUDA_PATH: {cuda_path}")
+            cuda_bin = os.path.join(cuda_path, 'bin')
+            if os.path.exists(cuda_bin):
+                logger.debug(f"[GPU检测]   ✓ CUDA bin目录存在")
+            else:
+                logger.debug(f"[GPU检测]   ✗ CUDA bin目录不存在")
+        else:
+            logger.debug("[GPU检测]   ✗ CUDA_PATH环境变量未设置")
+        
+        # 2. 检查PATH环境变量
+        path_env = os.environ.get('PATH', '')
+        cuda_paths = [p for p in path_env.split(os.pathsep) if 'cuda' in p.lower()]
+        if cuda_paths:
+            logger.debug(f"[GPU检测]   PATH中找到CUDA: {cuda_paths[0]}")
+        else:
+            logger.debug("[GPU检测]   ✗ PATH中未找到CUDA路径")
+        
+        # 3. 检查打包程序的情况
+        if getattr(sys, 'frozen', False):
+            logger.debug("[GPU检测]   当前运行在打包程序中")
+            app_dir = os.path.dirname(sys.executable)
+            logger.debug(f"[GPU检测]   程序目录: {app_dir}")
+            
+            # 检查程序目录中是否有CUDA DLL
+            cuda_dlls = ['cudart64_12.dll', 'cudart64_11.dll', 'cudart64_110.dll']
+            found_dlls = []
+            for dll in cuda_dlls:
+                dll_path = os.path.join(app_dir, dll)
+                if os.path.exists(dll_path):
+                    found_dlls.append(dll)
+            
+            if found_dlls:
+                logger.debug(f"[GPU检测]   程序目录中找到: {', '.join(found_dlls)}")
+            else:
+                logger.warning("[GPU检测]   ✗ 程序目录中未找到CUDA DLL")
+                logger.warning("[GPU检测]      打包时可能未包含CUDA运行时库")
+        else:
+            logger.debug("[GPU检测]   当前运行在开发环境中")
+            
+    except Exception as e:
+        logger.debug(f"[GPU检测] 诊断过程出错: {e}")
 
 
 def get_gpu_recommendation() -> dict:
@@ -57,6 +168,12 @@ def get_gpu_recommendation() -> dict:
             'device_info': str  # GPU设备信息
         }
     """
+    from ..utils.logger import get_logger
+    logger = get_logger()
+    
+    logger.debug("=" * 60)
+    logger.debug("[GPU检测] 开始GPU配置检测")
+    
     has_hw = has_nvidia_gpu()
     has_ort_gpu = has_onnxruntime_gpu()
     
@@ -86,10 +203,16 @@ def get_gpu_recommendation() -> dict:
     # 生成建议
     if has_hw and has_ort_gpu:
         result['recommendation'] = '可以使用GPU加速'
+        logger.info("[GPU检测] ✓✓ GPU加速完全可用")
     elif has_hw and not has_ort_gpu:
         result['recommendation'] = '建议安装onnxruntime-gpu以启用GPU加速'
+        logger.warning("[GPU检测] ⚠ 有GPU硬件但CUDA Provider不可用")
     else:
         result['recommendation'] = 'GPU不可用，将使用CPU模式'
+        logger.info("[GPU检测] ℹ 将使用CPU模式")
+    
+    logger.debug("[GPU检测] 检测完成")
+    logger.debug("=" * 60)
     
     return result
 

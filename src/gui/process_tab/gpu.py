@@ -43,6 +43,8 @@ class GPUManager:
         """检查GPU状态并更新UI"""
         from ...utils.gpu_detector import get_gpu_recommendation
         
+        self.log_message("[信息] 正在检测GPU状态...")
+        
         # 获取详细的GPU状态
         self.gpu_info = get_gpu_recommendation()
         
@@ -53,6 +55,7 @@ class GPUManager:
         # 更新UI状态
         if not has_hw:
             # 无GPU硬件
+            self.log_message("[信息] 未检测到NVIDIA GPU硬件")
             self.ui['gpu_status_label'].config(text="GPU: 不可用", foreground="gray")
             self.ui['gpu_checkbox'].config(state="disabled")
             self.ui['gpu_enabled_var'].set(False)
@@ -61,6 +64,8 @@ class GPUManager:
                 
         elif has_hw and not has_ort_gpu:
             # 有硬件但未配置CUDA DLL
+            self.log_message(f"[警告] 检测到GPU硬件但CUDA支持不可用")
+            self.log_message(f"[提示] {self.gpu_info['recommendation']}")
             self.ui['gpu_status_label'].config(text="GPU: 可用 (需配置)", foreground="#E6A23C")  # 橙色
             self.ui['gpu_checkbox'].config(state="normal")
             self.ui['gpu_enabled_var'].set(False)
@@ -81,6 +86,7 @@ class GPUManager:
         else:
             # GPU可用且已配置CUDA DLL
             gpu_name = device_info.replace("CUDA GPU:", "").strip()
+            self.log_message(f"[成功] GPU加速可用: {gpu_name}")
                 
             self.ui['gpu_status_label'].config(text=f"GPU: {gpu_name} ✨", foreground="#67C23A")  # 绿色
             self.ui['gpu_checkbox'].config(state="normal")
