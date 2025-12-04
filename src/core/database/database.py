@@ -63,14 +63,18 @@ class ImageDatabase:
             DatabaseSchema.init_tables(cursor)
             DatabaseSchema.create_indexes(cursor)
     
-    # ==================== 图源管理（委托给 SourceManager） ====================
+    # ==================== 图源功能（委托给 SourceManager） ====================
     
     def add_source(self, folder_path: str) -> bool:
-        """添加图源文件夹"""
+        """添加图源"""
         return self._source_manager.add_source(folder_path)
     
     def get_sources(self):
         """获取所有图源"""
+        return self._source_manager.get_sources()
+    
+    def get_all_sources(self):
+        """获取所有图源（别名方法）"""
         return self._source_manager.get_sources()
     
     def remove_source(self, source_id: int):

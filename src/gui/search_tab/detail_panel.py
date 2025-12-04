@@ -33,6 +33,9 @@ class DetailPanel:
         self.on_emotion_save = on_emotion_save
         self.open_folder_callback = open_folder_callback
         
+        # 记录当前显示的图片
+        self.current_file_path = None
+        
         self._create_ui()
     
     def _create_ui(self):
@@ -118,6 +121,9 @@ class DetailPanel:
     
     def show_no_selection(self):
         """显示未选择图片的提示"""
+        # 清除当前显示的图片
+        self.current_file_path = None
+        
         for widget in self.detail_content_frame.winfo_children():
             widget.destroy()
         
@@ -130,8 +136,17 @@ class DetailPanel:
         hint_label.pack(pady=50)
         self._bind_mousewheel_to_widget(hint_label)
     
+    def refresh(self):
+        """刷新当前显示的图片详情"""
+        if self.current_file_path:
+            # 重新加载当前图片的详情
+            self.show_image_detail(self.current_file_path)
+    
     def show_image_detail(self, file_path: str):
         """显示图片详细信息"""
+        # 保存当前显示的图片路径
+        self.current_file_path = file_path
+        
         # 清空详情面板
         for widget in self.detail_content_frame.winfo_children():
             widget.destroy()

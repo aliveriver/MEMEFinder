@@ -188,6 +188,14 @@ class EventHandlers:
     
     def on_right_click(self, event):
         """右键菜单"""
+        # 优先使用新的上下文菜单（支持多选）
+        if hasattr(self, 'context_menu') and self.context_menu:
+            key = self.renderer.get_item_at_pos(event.x, event.y)
+            clicked_path = self.renderer.item_paths.get(key) if key else None
+            self.context_menu.show(event, clicked_path)
+            return
+        
+        # 旧的单个图片右键菜单（后备）
         key = self.renderer.get_item_at_pos(event.x, event.y)
         if key and key in self.renderer.item_paths:
             file_path = self.renderer.item_paths[key]
