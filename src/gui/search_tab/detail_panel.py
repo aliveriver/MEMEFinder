@@ -382,6 +382,127 @@ class DetailPanel:
             )
             score_label.grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
             self._bind_mousewheel_to_widget(score_label)
+        
+        # 自定义标签区域
+        sep4 = ttk.Separator(self.detail_content_frame, orient=tk.HORIZONTAL)
+        sep4.pack(fill=tk.X, pady=10, padx=10)
+        self._bind_mousewheel_to_widget(sep4)
+        
+        tags_frame = ttk.Frame(self.detail_content_frame)
+        tags_frame.pack(fill=tk.X, pady=5, padx=10)
+        self._bind_mousewheel_to_widget(tags_frame)
+        
+        tags_label = ttk.Label(tags_frame, text="自定义标签:", font=('TkDefaultFont', 9, 'bold'))
+        tags_label.pack(anchor='w', pady=(0, 5))
+        self._bind_mousewheel_to_widget(tags_label)
+        
+        # 标签显示区域
+        self.tags_display_frame = ttk.Frame(tags_frame)
+        self.tags_display_frame.pack(fill=tk.X, pady=(0, 5))
+        self._bind_mousewheel_to_widget(self.tags_display_frame)
+        
+        # 加载并显示当前图片的标签
+        self._load_and_display_tags(file_path)
+        
+        # 标签编辑按钮
+        tags_btn_frame = ttk.Frame(tags_frame)
+        tags_btn_frame.pack(fill=tk.X)
+        self._bind_mousewheel_to_widget(tags_btn_frame)
+        
+        ttk.Button(
+            tags_btn_frame,
+            text="🏷️ 编辑标签",
+            command=lambda: self._edit_image_tags(file_path)
+        ).pack(side=tk.LEFT)
+    
+    def _load_and_display_tags(self, file_path: str):
+        """加载并显示图片的标签"""
+        # 清空现有标签显示
+        for widget in self.tags_display_frame.winfo_children():
+            widget.destroy()
+        
+        try:
+            tags = self.db.get_image_tags_by_path(file_path)
+            
+            if not tags:
+                no_tags_label = ttk.Label(
+                    self.tags_display_frame,
+                    text="暂无标签",
+                    foreground='gray',
+                    font=('TkDefaultFont', 8)
+                )
+                no_tags_label.pack(anchor='w')
+                self._bind_mousewheel_to_widget(no_tags_label)
+            else:
+                # 显示标签为彩色标签
+                tags_container = ttk.Frame(self.tags_display_frame)
+                tags_container.pack(fill=tk.X)
+                self._bind_mousewheel_to_widget(tags_container)
+                
+                for tag in tags:
+                    self._create_tag_label(tags_container, tag['name'], tag['color'])
+        except Exception as e:
+            error_label = ttk.Label(
+                self.tags_display_frame,
+                text=f"加载标签失败: {e}",
+                foreground='red',
+                font=('TkDefaultFont', 8)
+            )
+            error_label.pack(anchor='w')
+            self._bind_mousewheel_to_widget(error_label)
+    
+    def _create_tag_label(self, parent, name: str, color: str):
+        """创建一个彩色标签显示"""
+        tag_label = tk.Label(
+            parent,
+            text=f" {name} ",
+            bg=color,
+            fg=self._get_contrast_color(color),
+            font=('TkDefaultFont', 8, 'bold'),
+            relief=tk.RAISED,
+            padx=5,
+            pady=2
+        )
+        tag_label.pack(side=tk.LEFT, padx=2, pady=2)
+        self._bind_mousewheel_to_widget(tag_label)
+    
+    def _get_contrast_color(self, hex_color: str):
+        """根据背景色返回对比色（黑色或白色）"""
+        try:
+            # 移除#号
+            hex_color = hex_color.lstrip('#')
+            # 转换为RGB
+            r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+            # 计算亮度
+            brightness = (r * 299 + g * 587 + b * 114) / 1000
+            return 'black' if brightness > 128 else 'white'
+        except:
+            return 'black'
+    
+    def _edit_image_tags(self, file_path: str):
+        """编辑图片标签"""
+        from .tag_selector_dialog import TagSelectorDialog
+        
+        dialog = TagSelectorDialog(
+            self.parent_frame.winfo_toplevel(),
+            self.db,
+            file_path,
+            callback=lambda: self._on_tags_updated(file_path)
+        )
+    
+    def _on_tags_updated(self, file_path: str):
+        """标签更新后的回调"""
+        self._load_and_display_tags(file_path)
+    
+    def _open_tag_manager(self):
+        """打开标签管理对话框"""
+        from ..tag_manager_dialog import TagManagerDialog
+        
+        TagManagerDialog(
+            self.parent_frame.winfo_toplevel(),
+            self.db,
+            callback=None
+        )
     
     def _create_info_row(self, label_text: str, value_text: str, selectable: bool = False):
         """创建信息行"""

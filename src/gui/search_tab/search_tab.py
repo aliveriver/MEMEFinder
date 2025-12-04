@@ -69,6 +69,7 @@ class SearchTab:
         
         ttk.Button(search_frame, text="🔍 搜索", command=self.search_images).grid(row=0, column=4, padx=5)
         ttk.Button(search_frame, text="🔄 刷新", command=self.refresh_page).grid(row=0, column=5, padx=5)
+        ttk.Button(search_frame, text="🔖 管理标签", command=self._open_tag_manager).grid(row=0, column=6, padx=5)
         
         # 情感筛选
         ttk.Label(search_frame, text="情绪:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
@@ -480,3 +481,13 @@ class SearchTab:
     def _open_folder(self, file_path):
         """打开文件夹"""
         self.event_handler.open_folder(file_path)
+    
+    def _open_tag_manager(self):
+        """打开标签管理对话框"""
+        from ..tag_manager_dialog import TagManagerDialog
+        
+        TagManagerDialog(
+            self.parent.winfo_toplevel(),
+            self.db,
+            callback=None
+        )

@@ -60,6 +60,28 @@ class DatabaseSchema:
             )
         """)
         
+        # 标签表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                color TEXT NOT NULL,
+                created_time TEXT NOT NULL
+            )
+        """)
+        
+        # 图片-标签关联表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS image_tags (
+                image_id INTEGER NOT NULL,
+                tag_id INTEGER NOT NULL,
+                added_time TEXT NOT NULL,
+                PRIMARY KEY (image_id, tag_id),
+                FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+            )
+        """)
+        
         logger.info("数据库表结构初始化完成")
     
     @staticmethod
@@ -84,6 +106,17 @@ class DatabaseSchema:
         """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_is_favorite ON images(is_favorite)
+        """)
+        
+        # 标签相关索引
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tag_name ON tags(name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_image_tags_image ON image_tags(image_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_image_tags_tag ON image_tags(tag_id)
         """)
         
         logger.info("数据库索引创建完成")

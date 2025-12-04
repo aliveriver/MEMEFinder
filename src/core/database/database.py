@@ -18,6 +18,7 @@ from .source_manager import SourceManager
 from .image_manager import ImageManager
 from .search_manager import SearchManager
 from .state_manager import StateManager
+from .tag_manager import TagManager
 
 logger = get_logger()
 
@@ -38,6 +39,7 @@ class ImageDatabase:
         self._image_manager = ImageManager(self.get_cursor)
         self._search_manager = SearchManager(self.get_cursor)
         self._state_manager = StateManager(self.get_cursor)
+        self._tag_manager = TagManager(self.get_cursor)
     
     @contextmanager
     def get_cursor(self, commit: bool = False):
@@ -115,6 +117,16 @@ class ImageDatabase:
         """获取单个图片的详细信息"""
         return self._image_manager.get_image_detail(file_path)
     
+    def get_image_info(self, file_path: str):
+        """获取图片基本信息（ID等）"""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, file_path, file_hash, source_id
+                FROM images
+                WHERE file_path = ?
+            """, (file_path,))
+            return cursor.fetchone()
+    
     def update_image_ocr(self, file_path: str, new_ocr_text: str, 
                         update_filtered: bool = True) -> bool:
         """更新图片的OCR文本"""
@@ -165,6 +177,64 @@ class ImageDatabase:
     def get_app_state(self, key: str) -> str:
         """获取应用状态键对应的值"""
         return self._state_manager.get_app_state(key)
+    
+    # ==================== 标签管理（委托给 TagManager） ====================
+    
+    def create_tag(self, name: str, color: str):
+        """创建新标签"""
+        return self._tag_manager.create_tag(name, color)
+    
+    def get_all_tags(self):
+        """获取所有标签"""
+        return self._tag_manager.get_all_tags()
+    
+    def get_tag_by_id(self, tag_id: int):
+        """根据ID获取标签"""
+        return self._tag_manager.get_tag_by_id(tag_id)
+    
+    def get_tag_by_name(self, name: str):
+        """根据名称获取标签"""
+        return self._tag_manager.get_tag_by_name(name)
+    
+    def update_tag(self, tag_id: int, name: str = None, color: str = None):
+        """更新标签"""
+        return self._tag_manager.update_tag(tag_id, name, color)
+    
+    def delete_tag(self, tag_id: int):
+        """删除标签"""
+        return self._tag_manager.delete_tag(tag_id)
+    
+    def add_tag_to_image(self, image_id: int, tag_id: int):
+        """为图片添加标签"""
+        return self._tag_manager.add_tag_to_image(image_id, tag_id)
+    
+    def remove_tag_from_image(self, image_id: int, tag_id: int):
+        """从图片移除标签"""
+        return self._tag_manager.remove_tag_from_image(image_id, tag_id)
+    
+    def get_image_tags(self, image_id: int):
+        """获取图片的所有标签"""
+        return self._tag_manager.get_image_tags(image_id)
+    
+    def get_image_tags_by_path(self, file_path: str):
+        """根据文件路径获取图片标签"""
+        return self._tag_manager.get_image_tags_by_path(file_path)
+    
+    def set_image_tags(self, image_id: int, tag_ids: list):
+        """设置图片的标签"""
+        return self._tag_manager.set_image_tags(image_id, tag_ids)
+    
+    def set_image_tags_by_path(self, file_path: str, tag_ids: list):
+        """根据文件路径设置图片标签"""
+        return self._tag_manager.set_image_tags_by_path(file_path, tag_ids)
+    
+    def get_images_by_tag(self, tag_id: int, limit: int = 100):
+        """获取包含指定标签的图片"""
+        return self._tag_manager.get_images_by_tag(tag_id, limit)
+    
+    def get_tag_statistics(self):
+        """获取标签使用统计"""
+        return self._tag_manager.get_tag_statistics()
     
     # ==================== 数据库维护 ====================
     
