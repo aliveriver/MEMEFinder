@@ -155,18 +155,18 @@ class ImageDatabase:
         return self._search_manager.search_images(keyword, emotion, limit)
     
     def get_images_count(self, processed: int = None, keyword: str = "", emotion: str = "", 
-                        emotions=None, source_ids=None, is_favorite: bool = None) -> int:
+                        emotions=None, source_ids=None, tag_ids=None, is_favorite: bool = None) -> int:
         """获取符合条件的图片总数（用于分页）"""
         return self._search_manager.get_images_count(processed, keyword, emotion, 
-                                                     emotions, source_ids, is_favorite)
+                                                     emotions, source_ids, tag_ids, is_favorite)
     
     def get_images_page(self, page: int = 1, page_size: int = 20, processed: int = None,
                         keyword: str = "", emotion: str = "", emotions=None,
-                        source_ids=None, is_favorite: bool = None):
+                        source_ids=None, tag_ids=None, is_favorite: bool = None):
         """分页获取图片数据"""
         return self._search_manager.get_images_page(page, page_size, processed, 
                                                     keyword, emotion, emotions, 
-                                                    source_ids, is_favorite)
+                                                    source_ids, tag_ids, is_favorite)
     
     def get_statistics(self):
         """获取统计信息"""

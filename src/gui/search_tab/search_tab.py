@@ -32,6 +32,7 @@ class SearchTab:
         # 筛选条件
         self.selected_emotions = []
         self.selected_sources = []
+        self.selected_tags = []
         
         # 延迟调度ID
         self._reload_after_id = None
@@ -89,15 +90,24 @@ class SearchTab:
         )
         self.source_dropdown.grid(row=1, column=3, sticky=tk.W, padx=5, pady=5)
         
+        # 标签筛选
+        ttk.Label(search_frame, text="标签:").grid(row=1, column=4, sticky=tk.W, padx=5, pady=5)
+        self.tag_dropdown = CheckboxDropdown(
+            search_frame, [], default_text="全部标签",
+            callback=self._on_tag_filter_change, width=20
+        )
+        self.tag_dropdown.grid(row=1, column=5, sticky=tk.W, padx=5, pady=5)
+        
         # 收藏筛选
         self.favorite_filter_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             search_frame, text="❤ 只看收藏",
             variable=self.favorite_filter_var,
             command=self._on_favorite_filter_change
-        ).grid(row=1, column=4, sticky=tk.W, padx=5, pady=5)
+        ).grid(row=1, column=6, sticky=tk.W, padx=5, pady=5)
         
         self._load_sources()
+        self._load_tags()
     
     def _create_result_frame(self):
         """创建结果显示框架"""
@@ -245,6 +255,20 @@ class SearchTab:
             self.source_dropdown.vars[value] = tk.BooleanVar(value=False)
         self.source_dropdown._update_button_text()
     
+    def _load_tags(self):
+        """加载标签列表"""
+        tags = self.db.get_all_tags()
+        options = []
+        for tag in tags:
+            display_text = f"{tag['name']}"
+            options.append((display_text, tag['id']))
+        
+        self.tag_dropdown.options = options
+        self.tag_dropdown.vars = {}
+        for label, value in options:
+            self.tag_dropdown.vars[value] = tk.BooleanVar(value=False)
+        self.tag_dropdown._update_button_text()
+    
     def _on_emotion_filter_change(self):
         """情感筛选变化"""
         self.selected_emotions = self.emotion_dropdown.get_selected_values()
@@ -253,6 +277,11 @@ class SearchTab:
     def _on_source_filter_change(self):
         """图源筛选变化"""
         self.selected_sources = self.source_dropdown.get_selected_values()
+        self.search_images()
+    
+    def _on_tag_filter_change(self):
+        """标签筛选变化"""
+        self.selected_tags = self.tag_dropdown.get_selected_values()
         self.search_images()
     
     def _on_favorite_filter_change(self):
@@ -276,6 +305,7 @@ class SearchTab:
     def refresh_page(self):
         """刷新页面"""
         self._load_sources()
+        self._load_tags()
         self.load_page()
         # 刷新详情面板（如果正在显示某张图片）
         self.detail_panel.refresh()
@@ -295,6 +325,7 @@ class SearchTab:
         
         emotions = self.selected_emotions if self.selected_emotions else None
         source_ids = self.selected_sources if self.selected_sources else None
+        tag_ids = self.selected_tags if self.selected_tags else None
         is_favorite = True if self.favorite_filter_var.get() else None
         
         # 清空渲染器
@@ -306,7 +337,7 @@ class SearchTab:
         # 计算总页数
         total = self.db.get_images_count(
             processed=1, keyword=keyword, emotions=emotions,
-            source_ids=source_ids, is_favorite=is_favorite
+            source_ids=source_ids, tag_ids=tag_ids, is_favorite=is_favorite
         )
         self.total_pages = max(1, (total + page_size - 1) // page_size)
         if page > self.total_pages:
@@ -317,7 +348,7 @@ class SearchTab:
         self.all_results = self.db.get_images_page(
             page=page, page_size=page_size, processed=1,
             keyword=keyword, emotions=emotions, source_ids=source_ids,
-            is_favorite=is_favorite
+            tag_ids=tag_ids, is_favorite=is_favorite
         )
         
         # 重新加载favorite_cache，确保收藏状态是最新的
