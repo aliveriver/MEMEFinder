@@ -6,24 +6,29 @@
 
 ```
 search_tab/
-├── __init__.py              # 模块导出
-├── search_tab.py            # 主标签页类（整合所有功能）
-├── checkbox_dropdown.py     # 复选框下拉菜单组件
-├── detail_panel.py          # 图片详情面板
-├── canvas_renderer.py       # Canvas渲染器（虚拟化列表）
-├── event_handlers.py        # 事件处理器
-└── README.md                # 本文档
+├── __init__.py                # 模块导出
+├── search_tab.py              # 主标签页类（整合所有功能）
+├── checkbox_dropdown.py       # 复选框下拉菜单组件
+├── detail_panel.py            # 图片详情面板
+├── canvas_renderer.py         # Canvas渲染器（虚拟化列表）
+├── event_handlers.py          # 事件处理器
+├── context_menu.py            # 右键上下文菜单
+├── batch_tag_editor.py        # 批量标签编辑对话框
+├── batch_emotion_editor.py    # 批量情感编辑对话框
+├── batch_move_dialog.py       # 批量移动到图源对话框
+└── README.md                  # 本文档
 ```
 
 ## 📋 各模块职责
 
-### 1. `search_tab.py` - 主标签页类 (~450行)
+### 1. `search_tab.py` - 主标签页类 (~500行)
 - **职责**：整合所有功能，协调各个组件
 - **主要功能**：
-  - 创建UI布局
-  - 管理搜索条件和筛选
-  - 分页控制
-  - 数据加载和状态管理
+  - 创建UI布局（搜索条件、标签管理按钮、分页控件）
+  - 管理搜索条件和多维度筛选（关键词、情感、图源、收藏、标签）
+  - 分页控制和数据加载
+  - favorite_cache 管理（从数据库实时加载）
+  - 详情面板刷新控制
 - **使用**：
   ```python
   from src.gui.search_tab import SearchTab
@@ -31,25 +36,33 @@ search_tab/
   tab = SearchTab(parent, db)
   ```
 
-### 2. `checkbox_dropdown.py` - 复选框下拉菜单 (~170行)
+### 2. `checkbox_dropdown.py` - 复选框下拉菜单 (~190行)
 - **职责**：提供多选下拉菜单控件
 - **主要功能**：
-  - 下拉菜单显示/隐藏
+  - 下拉菜单显示/隐藏（坐标检测点击外部）
   - 多选状态管理
   - 全选/清空操作
   - 选择变化回调
-- **特点**：独立的通用组件，可复用
+- **特点**：
+  - 独立的通用组件，可复用
+  - 使用坐标检测避免FocusOut误关闭
+  - 支持延迟关闭（100ms）
 
-### 3. `detail_panel.py` - 详情面板 (~450行)
+### 3. `detail_panel.py` - 详情面板 (~560行)
 - **职责**：显示和编辑图片详细信息
 - **主要功能**：
   - 显示图片缩略图
-  - 显示文件信息（路径、时间等）
-  - 编辑OCR文本
-  - 编辑情绪标签
-  - 收藏状态切换
+  - 显示文件信息（路径、时间、大小等）
+  - 编辑OCR文本（可保存）
+  - 编辑情绪标签（正向/负向/中性/未分类）
+  - 收藏状态切换（爱心按钮）
+  - **标签显示和编辑**（彩色标签卡片）
   - 可滚动的详情区域
+  - **自动刷新功能**（`refresh()` 方法）
 - **交互**：通过回调函数与主类通信
+- **新增**：
+  - `current_file_path` - 记录当前显示的图片
+  - `refresh()` - 重新加载当前图片详情
 
 ### 4. `canvas_renderer.py` - Canvas渲染器 (~450行)
 - **职责**：高性能虚拟化列表渲染
@@ -58,19 +71,70 @@ search_tab/
   - 布局计算（自适应列数）
   - 缩略图加载和缓存
   - 文本截断和换行
-  - 复选框/爱心图标渲染
+  - **复选框渲染**（右上角）
+  - **爱心图标渲染**（左上角，根据收藏状态）
+  - **标签显示**（底部彩色标签）
   - 悬停高亮效果
+  - 选中状态显示（蓝色边框）
 - **优化**：使用虚拟化技术，支持大量图片流畅显示
 
-### 5. `event_handlers.py` - 事件处理器 (~250行)
+### 5. `event_handlers.py` - 事件处理器 (~260行)
 - **职责**：处理用户交互事件
 - **主要功能**：
   - 鼠标点击（单击、双击、右键）
-  - Shift/Ctrl 多选
+  - **Shift/Ctrl 多选**（范围选择和多选）
+  - **单击空白取消全选**
   - 鼠标悬停和滚轮
-  - 右键菜单（打开、删除、复制路径等）
-  - 文件操作（打开图片/文件夹）
+  - 复选框点击处理
+  - 爱心图标点击处理
+  - **右键菜单触发**
 - **解耦**：将事件处理逻辑从主类中分离
+
+### 6. `context_menu.py` - 右键上下文菜单 (~235行)
+- **职责**：处理多选图片的批量操作
+- **主要功能**：
+  - 显示选中图片数量
+  - **智能显示收藏/取消收藏按钮**（根据选中项状态）
+  - 批量编辑标签（调用 BatchTagEditor）
+  - 批量编辑情感（调用 BatchEmotionEditor）
+  - 批量转移到图源（调用 BatchMoveDialog）
+  - 批量删除（二次确认）
+- **特点**：
+  - 菜单项根据选中项状态动态显示
+  - 所有操作完成后刷新页面
+
+### 7. `batch_tag_editor.py` - 批量标签编辑 (~313行)
+- **职责**：批量编辑图片标签
+- **主要功能**：
+  - 三种操作模式：
+    - 添加标签（保留原有标签）
+    - 移除标签（仅移除选中的标签）
+    - 替换标签（清空原有标签，设置为选中的）
+  - 显示所有可用标签（带颜色）
+  - **管理标签按钮**（快速打开标签管理器）
+  - 全选/全不选标签
+  - 应用和取消按钮
+- **窗口大小**：550x550（确保所有按钮可见）
+
+### 8. `batch_emotion_editor.py` - 批量情感编辑 (~113行)
+- **职责**：批量设置图片情感标签
+- **主要功能**：
+  - 四种情感选择：正向/负向/中性/未分类
+  - 单选按钮选择
+  - 应用和取消按钮
+- **窗口大小**：450x350（优化布局）
+
+### 9. `batch_move_dialog.py` - 批量移动对话框 (~222行)
+- **职责**：将图片批量转移到指定图源
+- **主要功能**：
+  - 显示所有可用图源
+  - 选择目标图源
+  - 文件移动操作（处理同名文件）
+  - 更新数据库记录
+  - 二次确认
+- **特点**：
+  - 自动处理文件路径
+  - 显示操作结果统计
 
 ## 🎯 设计优势
 
@@ -80,24 +144,177 @@ search_tab/
 - 渲染（canvas_renderer）
 - 事件处理（event_handlers）
 - 详情显示（detail_panel）
+- 批量操作对话框（batch_*）
+- 右键菜单（context_menu）
 - 整体协调（search_tab）
 
 ### 2. **高内聚低耦合**
 - 模块内部高度内聚
 - 模块间通过清晰的接口通信
-- 使用回调函数解耦
+- 使用回调函数和依赖注入解耦
 
 ### 3. **易于维护**
-- 每个文件代码量适中（170~450行）
+- 每个文件代码量适中（113~560行）
 - 功能职责清晰
 - 便于定位和修复问题
+- 各模块可独立修改而不影响其他模块
 
 ### 4. **易于测试**
 - 各模块可以独立测试
 - 渲染器和事件处理器可以模拟测试
+- 批量操作对话框可以单独验证
 
 ### 5. **便于扩展**
 - 新增UI组件：添加新的组件文件
+- 新增批量操作：创建新的对话框类
+- 新增右键菜单项：在 context_menu.py 中添加
+- 新增筛选条件：在 search_tab.py 中扩展
+
+## 🔄 数据流
+
+```
+用户操作
+    ↓
+event_handlers.py (处理点击、键盘输入)
+    ↓
+search_tab.py (更新状态、触发数据加载)
+    ↓
+database (查询图片数据)
+    ↓
+canvas_renderer.py (渲染图片列表)
+    ↓
+detail_panel.py (显示选中图片详情)
+```
+
+## 🖱️ 交互流程
+
+### 多选操作
+```
+1. 用户点击复选框 → event_handlers._toggle_checkbox()
+2. 更新 selected_items 集合
+3. canvas_renderer 重新渲染显示选中状态
+```
+
+### 批量编辑
+```
+1. 用户右键选中项 → event_handlers.on_right_click()
+2. context_menu.show() 显示菜单
+3. 用户选择操作 → 打开对应对话框
+4. 对话框执行操作 → 调用 refresh_callback
+5. search_tab.refresh_page() 刷新页面
+6. detail_panel.refresh() 更新详情面板
+```
+
+### 标签管理
+```
+1. 点击"管理标签"按钮 → 打开 TagManagerDialog
+2. 创建/编辑/删除标签
+3. 关闭对话框 → 刷新标签筛选下拉菜单
+4. 在批量编辑中点击"管理标签" → 刷新标签列表
+```
+
+## 📊 性能优化
+
+### 虚拟化渲染
+- 只渲染可见区域的图片（~20-50张）
+- 滚动时动态加载/卸载
+- 减少内存占用和渲染时间
+
+### 缩略图缓存
+- 使用 PIL 生成缩略图
+- 缓存 PhotoImage 对象
+- 避免重复加载和转换
+
+### favorite_cache 优化
+- 每次 load_page() 从数据库重新加载
+- 确保收藏状态始终最新
+- 支持混合状态正确显示
+
+### 延迟操作
+- 使用 after() 延迟执行非关键操作
+- 避免频繁触发重新渲染
+- 优化滚动性能
+
+## 🔧 关键技术点
+
+### 1. 坐标检测（checkbox_dropdown.py）
+```python
+def _on_outside_click(self, event):
+    # 获取下拉菜单的绝对坐标
+    x1 = self.dropdown.winfo_rootx()
+    y1 = self.dropdown.winfo_rooty()
+    # 判断点击是否在菜单外
+    if not (x1 <= event.x_root <= x2 and y1 <= event.y_root <= y2):
+        self._close_dropdown()
+```
+
+### 2. 虚拟化渲染（canvas_renderer.py）
+```python
+def render_visible_items(self):
+    # 计算可见范围
+    visible_start = scroll_y // row_height
+    visible_end = (scroll_y + canvas_height) // row_height
+    # 只渲染可见项
+    for row in range(visible_start, visible_end + 1):
+        self._render_row(row)
+```
+
+### 3. 详情面板刷新（detail_panel.py）
+```python
+def refresh(self):
+    if self.current_file_path:
+        # 重新加载当前图片
+        self.show_image_detail(self.current_file_path)
+```
+
+### 4. 智能按钮显示（context_menu.py）
+```python
+# 检查选中项的收藏状态
+need_favorite = any(not cache.get(p, False) for p in items)
+need_unfavorite = any(cache.get(p, False) for p in items)
+# 根据状态显示相应按钮
+if need_favorite:
+    menu.add_command("❤ 收藏")
+if need_unfavorite:
+    menu.add_command("💔 取消收藏")
+```
+
+## 📝 使用示例
+
+### 创建搜索标签页
+```python
+from src.gui.search_tab import SearchTab
+from src.core.database import ImageDatabase
+
+db = ImageDatabase("meme_finder.db")
+tab = SearchTab(parent_notebook, db)
+```
+
+### 自定义回调
+```python
+def on_favorite_changed(file_path, is_favorite):
+    print(f"{file_path} 收藏状态: {is_favorite}")
+
+detail_panel = DetailPanel(
+    parent, db, favorite_cache,
+    on_favorite_toggle=on_favorite_changed,
+    ...
+)
+```
+
+### 批量操作
+```python
+# 创建右键菜单
+context_menu = ContextMenu(
+    parent, db,
+    get_selected_items_func=lambda: selected_items,
+    get_favorite_cache_func=lambda: favorite_cache,
+    refresh_callback=refresh_page
+)
+
+# 显示菜单
+context_menu.show(event, clicked_item_path)
+```
 - 修改渲染逻辑：只需修改 canvas_renderer
 - 新增事件：只需修改 event_handlers
 
