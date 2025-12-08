@@ -250,7 +250,9 @@ class ImageProcessor:
                     filtered_text='',
                     emotion='未处理',
                     pos_score=0.0,
-                    neg_score=0.0
+                    neg_score=0.0,
+                    phash=None,
+                    hsv_h=None
                 )
                 return {
                     'success': True,
@@ -287,7 +289,9 @@ class ImageProcessor:
                 filtered_text=result['filtered_text'],
                 emotion=result['emotion'],
                 pos_score=result['emotion_positive'],
-                neg_score=result['emotion_negative']
+                neg_score=result['emotion_negative'],
+                phash=result.get('phash'),
+                hsv_h=result.get('hsv_h')
             )
             
             logger.debug(f"Image {img_id} data saved to database")

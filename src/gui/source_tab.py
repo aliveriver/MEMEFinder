@@ -284,15 +284,15 @@ class SourceTab:
                 messagebox.showwarning("警告", f"图源文件夹不存在：{folder_path}")
                 continue
             
-            # 获取已存在的图片哈希
-            existing_hashes = self.db.get_image_hashes()
+            # 获取已存在的图片路径
+            existing_paths = self.db.get_image_paths()
             
             # 查找新图片
-            new_images = self.scanner.find_new_images(folder_path, existing_hashes)
+            new_images = self.scanner.find_new_images(folder_path, existing_paths)
             
             # 批量添加
             if new_images:
-                batch_data = [(str(img_path), img_hash, source_id) for img_path, img_hash in new_images]
+                batch_data = [(str(img_path.absolute()), source_id) for img_path in new_images]
                 added = self.db.add_images_batch(batch_data)
                 total_new += added
             
@@ -330,16 +330,16 @@ class SourceTab:
             if not os.path.exists(folder_path):
                 continue
             
-            # 获取全局已存在的图片哈希（不限定图源）
+            # 获取全局已存在的图片路径（不限定图源）
             # 这样可以避免重复添加相同的图片，即使它们在不同图源
-            existing_hashes = self.db.get_image_hashes()
+            existing_paths = self.db.get_image_paths()
             
             # 查找新图片
-            new_images = self.scanner.find_new_images(folder_path, existing_hashes)
+            new_images = self.scanner.find_new_images(folder_path, existing_paths)
             
             # 批量添加到数据库（优化性能）
             if new_images:
-                batch_data = [(str(img_path), img_hash, source['id']) for img_path, img_hash in new_images]
+                batch_data = [(str(img_path.absolute()), source['id']) for img_path in new_images]
                 added = self.db.add_images_batch(batch_data)
                 total_new += added
             

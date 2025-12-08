@@ -37,7 +37,14 @@ class DatabaseSchema:
             CREATE TABLE IF NOT EXISTS images (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_path TEXT UNIQUE NOT NULL,
-                file_hash TEXT NOT NULL,
+                file_hash TEXT,
+                phash TEXT,
+                hsv_h INTEGER,
+                hsv_s INTEGER,
+                hsv_v INTEGER,
+                color_hue_idx TINYINT,
+                color_lightness TINYINT,
+                color_histogram BLOB,
                 source_id INTEGER,
                 ocr_text TEXT,
                 filtered_text TEXT,
@@ -90,7 +97,16 @@ class DatabaseSchema:
         logger.info("创建数据库索引...")
         
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_file_hash ON images(file_hash)
+            CREATE INDEX IF NOT EXISTS idx_phash ON images(phash)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_hsv_h ON images(hsv_h)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_color_hue_idx ON images(color_hue_idx)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_color_sort ON images(color_hue_idx, color_lightness)
         """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_emotion ON images(emotion)

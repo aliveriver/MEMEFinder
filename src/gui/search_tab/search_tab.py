@@ -9,11 +9,15 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from ...core.database import ImageDatabase
+from ...core.database.image_sorter import ImageSorter
+from ...utils.logger import get_logger
 from .checkbox_dropdown import CheckboxDropdown
 from .detail_panel import DetailPanel
 from .canvas_renderer import CanvasRenderer
 from .event_handlers import EventHandlers
 from .context_menu import ContextMenu
+
+logger = get_logger()
 
 
 class SearchTab:
@@ -71,7 +75,8 @@ class SearchTab:
         
         ttk.Button(search_frame, text="🔍 搜索", command=self.search_images).grid(row=0, column=4, padx=5)
         ttk.Button(search_frame, text="🔄 刷新", command=self.refresh_page).grid(row=0, column=5, padx=5)
-        ttk.Button(search_frame, text="🔖 管理标签", command=self._open_tag_manager).grid(row=0, column=6, padx=5)
+        ttk.Button(search_frame, text="🖼️ 以图搜图", command=self._search_by_image).grid(row=0, column=6, padx=5)
+        ttk.Button(search_frame, text="🔖 管理标签", command=self._open_tag_manager).grid(row=0, column=7, padx=5)
         
         # 情感筛选
         ttk.Label(search_frame, text="情绪:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
@@ -105,6 +110,32 @@ class SearchTab:
             variable=self.favorite_filter_var,
             command=self._on_favorite_filter_change
         ).grid(row=1, column=6, sticky=tk.W, padx=5, pady=5)
+        
+        # 第三行：排序选项
+        ttk.Label(search_frame, text="排序:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
+        
+        # 排序模式选择
+        self.sort_mode_var = tk.StringVar(value="time")
+        sort_modes = [
+            ("按时间", "time"),
+            ("颜色聚类", "color")
+        ]
+        sort_frame = ttk.Frame(search_frame)
+        sort_frame.grid(row=2, column=1, columnspan=3, sticky=tk.W, padx=5, pady=5)
+        
+        for text, value in sort_modes:
+            ttk.Radiobutton(
+                sort_frame, text=text, value=value,
+                variable=self.sort_mode_var,
+                command=self._on_sort_mode_change
+            ).pack(side=tk.LEFT, padx=5)
+        
+        # 排序说明
+        self.sort_info_label = ttk.Label(search_frame, text="(右键图片可选择'以此为参考排序')", foreground="gray")
+        self.sort_info_label.grid(row=2, column=4, columnspan=3, sticky=tk.W, padx=5, pady=5)
+        
+        # 相似度排序的参考图片
+        self.similarity_reference = None
         
         self._load_sources()
         self._load_tags()
@@ -173,7 +204,8 @@ class SearchTab:
             self.db,
             get_selected_items_func=lambda: self.selected_items,
             get_favorite_cache_func=lambda: self.favorite_cache,
-            refresh_callback=self.refresh_page
+            refresh_callback=self.refresh_page,
+            sort_by_similarity_callback=self._sort_by_similarity_reference
         )
         
         # 将上下文菜单附加到事件处理器
@@ -350,6 +382,12 @@ class SearchTab:
             keyword=keyword, emotions=emotions, source_ids=source_ids,
             tag_ids=tag_ids, is_favorite=is_favorite
         )
+        
+        # 保存原始结果
+        self.original_results = self.all_results.copy()
+        
+        # 应用排序
+        self._apply_sort()
         
         # 重新加载favorite_cache，确保收藏状态是最新的
         self.favorite_cache = {}
@@ -544,3 +582,205 @@ class SearchTab:
             self.db,
             callback=None
         )
+    
+    # ==================== 排序相关 ====================
+    
+    def _on_sort_mode_change(self):
+        """排序模式变化"""
+        mode = self.sort_mode_var.get()
+        
+        if mode == "time":
+            self.sort_info_label.config(text="(右键图片可选择'以此为参考排序')", foreground="gray")
+        elif mode == "color":
+            self.sort_info_label.config(text="(将颜色相近的图片聚集在一起)", foreground="blue")
+        
+        # 应用排序
+        self._apply_sort()
+    
+    def _apply_sort(self):
+        """应用当前排序模式"""
+        if not self.all_results:
+            return
+        
+        mode = self.sort_mode_var.get()
+        
+        if mode == "color":
+            # 按颜色聚类排序
+            self.all_results = ImageSorter.sort_by_color(self.all_results)
+        # time模式不需要重新排序，数据库已经按时间排序
+        # similarity模式通过右键菜单触发
+        
+        # 重新渲染
+        self.renderer.clear_all()
+        self._render_visible_items()
+    
+    def _sort_by_similarity_reference(self, reference_path: str):
+        """以指定图片为参考进行相似度排序
+        
+        Args:
+            reference_path: 参考图片的文件路径
+        """
+        if not self.all_results:
+            return
+        
+        # 找到参考图片
+        reference_image = None
+        for img in self.all_results:
+            if img.get('file_path') == reference_path:
+                reference_image = img
+                break
+        
+        if not reference_image:
+            messagebox.showwarning("提示", "未找到参考图片")
+            return
+        
+        if not reference_image.get('phash'):
+            messagebox.showwarning("提示", "参考图片缺少PHash数据，请先处理该图片")
+            return
+        
+        # 保存参考图片
+        self.similarity_reference = reference_image
+        
+        # 按相似度排序
+        self.all_results = ImageSorter.sort_by_similarity(self.all_results, reference_image)
+        
+        # 更新排序说明
+        from pathlib import Path
+        ref_name = Path(reference_path).name
+        self.sort_info_label.config(
+            text=f"(已按与 {ref_name} 的相似度排序)",
+            foreground="green"
+        )
+        
+        # 重新渲染
+        self.renderer.clear_all()
+        self._render_visible_items()
+        
+        messagebox.showinfo("成功", f"已按与 {ref_name} 的相似度排序")
+    
+    def _search_by_image(self):
+        """以图搜图（支持文件选择和剪贴板）"""
+        from tkinter import filedialog
+        from PIL import ImageGrab
+        import tempfile
+        
+        # 创建选择对话框
+        choice_dialog = tk.Toplevel(self.frame)
+        choice_dialog.title("选择图片来源")
+        choice_dialog.geometry("300x150")
+        choice_dialog.transient(self.frame)
+        choice_dialog.grab_set()
+        
+        # 居中显示
+        choice_dialog.update_idletasks()
+        x = (choice_dialog.winfo_screenwidth() // 2) - (choice_dialog.winfo_width() // 2)
+        y = (choice_dialog.winfo_screenheight() // 2) - (choice_dialog.winfo_height() // 2)
+        choice_dialog.geometry(f"+{x}+{y}")
+        
+        selected_path = [None]  # 使用列表以便在内部函数中修改
+        
+        def select_from_file():
+            """从文件选择"""
+            file_path = filedialog.askopenfilename(
+                title="选择图片",
+                filetypes=[
+                    ("图片文件", "*.jpg *.jpeg *.png *.bmp *.gif *.webp"),
+                    ("所有文件", "*.*")
+                ]
+            )
+            if file_path:
+                selected_path[0] = file_path
+                choice_dialog.destroy()
+        
+        def select_from_clipboard():
+            """从剪贴板获取"""
+            try:
+                img = ImageGrab.grabclipboard()
+                if img is None:
+                    messagebox.showwarning("提示", "剪贴板中没有图片")
+                    return
+                
+                # 保存到临时文件
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+                img.save(temp_file.name)
+                temp_file.close()
+                
+                selected_path[0] = temp_file.name
+                choice_dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("错误", f"从剪贴板获取图片失败：{e}")
+        
+        # 按钮
+        ttk.Label(choice_dialog, text="请选择图片来源：", font=('TkDefaultFont', 10)).pack(pady=20)
+        
+        btn_frame = ttk.Frame(choice_dialog)
+        btn_frame.pack(pady=10)
+        
+        ttk.Button(btn_frame, text="📁 从文件选择", command=select_from_file, width=15).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="📋 从剪贴板", command=select_from_clipboard, width=15).pack(side=tk.LEFT, padx=10)
+        
+        ttk.Button(choice_dialog, text="取消", command=choice_dialog.destroy).pack(pady=10)
+        
+        # 等待对话框关闭
+        self.frame.wait_window(choice_dialog)
+        
+        if not selected_path[0]:
+            return
+        
+        # 计算选中图片的特征
+        try:
+            from pathlib import Path
+            from ...core.image_hash import calculate_image_hashes
+            from ...core.database.image_sorter import ImageSorter
+            
+            image_path = Path(selected_path[0])
+            if not image_path.exists():
+                messagebox.showerror("错误", "图片文件不存在")
+                return
+            
+            # 计算特征
+            messagebox.showinfo("提示", "正在计算图片特征，请稍候...")
+            phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v, histogram_bytes = calculate_image_hashes(image_path)
+            
+            # 构建参考图片对象
+            reference_image = {
+                'file_path': str(image_path),
+                'phash': phash,
+                'color_hue_idx': hue_idx,
+                'color_lightness': lightness,
+                'hsv_h': hsv_h,
+                'hsv_s': hsv_s,
+                'hsv_v': hsv_v,
+                'color_histogram': histogram_bytes
+            }
+            
+            if not self.all_results:
+                messagebox.showwarning("提示", "当前没有搜索结果")
+                return
+            
+            # 按综合相似度排序（PHash 60% + 直方图 40%）
+            self.all_results = ImageSorter.sort_by_combined_similarity(
+                self.all_results, reference_image,
+                phash_weight=0.6, histogram_weight=0.4
+            )
+            
+            # 保存参考图片
+            self.similarity_reference = reference_image
+            
+            # 更新排序说明
+            img_name = image_path.name
+            self.sort_info_label.config(
+                text=f"(已按与 {img_name} 的综合相似度排序)",
+                foreground="blue"
+            )
+            
+            # 重新渲染
+            self.renderer.clear_all()
+            self._render_visible_items()
+            
+            messagebox.showinfo("成功", f"已按与 {img_name} 的相似度排序\n使用：PHash(60%) + 直方图(40%)")
+            
+        except Exception as e:
+            logger.error(f"以图搜图失败: {e}")
+            messagebox.showerror("错误", f"以图搜图失败：{e}")
+

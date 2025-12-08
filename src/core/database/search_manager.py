@@ -138,9 +138,9 @@ class SearchManager:
         with self.get_cursor() as cursor:
             # 如果有标签筛选，需要 JOIN image_tags 表
             if tag_ids:
-                query = "SELECT DISTINCT i.id, i.file_path, i.filtered_text, i.emotion, i.emotion_positive, i.emotion_negative, i.processed, i.is_favorite, i.source_id, i.emotion_manual FROM images i INNER JOIN image_tags it ON i.id = it.image_id WHERE 1=1"
+                query = "SELECT DISTINCT i.id, i.file_path, i.filtered_text, i.emotion, i.emotion_positive, i.emotion_negative, i.processed, i.is_favorite, i.source_id, i.emotion_manual, i.phash, i.hsv_h, i.hsv_s, i.hsv_v, i.color_hue_idx, i.color_lightness, i.color_histogram FROM images i INNER JOIN image_tags it ON i.id = it.image_id WHERE 1=1"
             else:
-                query = "SELECT id, file_path, filtered_text, emotion, emotion_positive, emotion_negative, processed, is_favorite, source_id, emotion_manual FROM images WHERE 1=1"
+                query = "SELECT id, file_path, filtered_text, emotion, emotion_positive, emotion_negative, processed, is_favorite, source_id, emotion_manual, phash, hsv_h, hsv_s, hsv_v, color_hue_idx, color_lightness, color_histogram FROM images WHERE 1=1"
             
             params = []
             
@@ -190,7 +190,14 @@ class SearchManager:
                     'processed': bool(row[6]),
                     'is_favorite': bool(row[7]),
                     'source_id': row[8],
-                    'emotion_manual': bool(row[9])
+                    'emotion_manual': bool(row[9]),
+                    'phash': row[10] if len(row) > 10 else None,
+                    'hsv_h': row[11] if len(row) > 11 else -1,
+                    'hsv_s': row[12] if len(row) > 12 else 0,
+                    'hsv_v': row[13] if len(row) > 13 else 0,
+                    'color_hue_idx': row[14] if len(row) > 14 else -1,
+                    'color_lightness': row[15] if len(row) > 15 else 0,
+                    'color_histogram': row[16] if len(row) > 16 else None
                 })
         
         logger.debug(f"分页查询: 第{page}页, 每页{page_size}条, 返回{len(results)}条")

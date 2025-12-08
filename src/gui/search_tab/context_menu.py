@@ -16,7 +16,8 @@ class ContextMenu:
     """右键菜单处理器"""
     
     def __init__(self, parent, db, get_selected_items_func, 
-                 get_favorite_cache_func, refresh_callback):
+                 get_favorite_cache_func, refresh_callback, 
+                 sort_by_similarity_callback=None):
         """
         Args:
             parent: 父窗口
@@ -24,12 +25,14 @@ class ContextMenu:
             get_selected_items_func: 获取选中项的函数
             get_favorite_cache_func: 获取收藏缓存的函数
             refresh_callback: 刷新页面的回调
+            sort_by_similarity_callback: 以某图为参考排序的回调
         """
         self.parent = parent
         self.db = db
         self.get_selected_items = get_selected_items_func
         self.get_favorite_cache = get_favorite_cache_func
         self.refresh_callback = refresh_callback
+        self.sort_by_similarity_callback = sort_by_similarity_callback
         
         # 创建菜单
         self.menu = Menu(parent, tearoff=0)
@@ -97,6 +100,15 @@ class ContextMenu:
         )
         
         self.menu.add_separator()
+        
+        # 以此为参考排序（仅在单选时显示）
+        if count == 1 and self.sort_by_similarity_callback:
+            reference_path = list(selected_items)[0]
+            self.menu.add_command(
+                label="🔍 以此为参考排序",
+                command=lambda: self.sort_by_similarity_callback(reference_path)
+            )
+            self.menu.add_separator()
         
         # 删除
         self.menu.add_command(

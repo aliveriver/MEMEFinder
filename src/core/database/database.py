@@ -91,13 +91,13 @@ class ImageDatabase:
     
     # ==================== 图片管理（委托给 ImageManager） ====================
     
-    def get_image_hashes(self, source_id: int = None):
-        """获取已存在的图片哈希值"""
-        return self._image_manager.get_image_hashes(source_id)
+    def get_image_paths(self, source_id: int = None):
+        """获取已存在的图片路径"""
+        return self._image_manager.get_image_paths(source_id)
     
-    def add_image(self, file_path: str, file_hash: str, source_id: int) -> bool:
+    def add_image(self, file_path: str, source_id: int, phash: str = None, hsv_h: int = None) -> bool:
         """添加新图片"""
-        return self._image_manager.add_image(file_path, file_hash, source_id)
+        return self._image_manager.add_image(file_path, source_id, phash, hsv_h)
     
     def add_images_batch(self, images):
         """批量添加图片"""
@@ -108,10 +108,16 @@ class ImageDatabase:
         return self._image_manager.get_unprocessed_images(limit)
     
     def update_image_data(self, image_id: int, ocr_text: str, filtered_text: str, 
-                         emotion: str, pos_score: float, neg_score: float):
-        """更新图片处理结果"""
+                         emotion: str, pos_score: float, neg_score: float,
+                         phash: str = None, hsv_h: int = None,
+                         hsv_s: int = None, hsv_v: int = None,
+                         hue_idx: int = None, lightness: int = None, 
+                         histogram: bytes = None):
+        """更新图片处理结果（包括哈希值、HSV数据和K-Means颜色特征）"""
         self._image_manager.update_image_data(image_id, ocr_text, filtered_text, 
-                                             emotion, pos_score, neg_score)
+                                             emotion, pos_score, neg_score, 
+                                             phash, hsv_h, hsv_s, hsv_v,
+                                             hue_idx, lightness, histogram)
     
     def update_images_batch(self, updates):
         """批量更新图片数据"""

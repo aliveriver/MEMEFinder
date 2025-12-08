@@ -235,12 +235,31 @@ class OCRProcessor:
             emotion, pos_score, neg_score = self.sentiment_analyzer.analyze(filtered_text)
             logger.debug(f"情绪分析: {emotion} (正:{pos_score:.2f}, 负:{neg_score:.2f})")
             
+            # 5. 计算图片哈希值和颜色特征（PHash + HSV + K-Means颜色）
+            try:
+                from ..image_hash import calculate_image_hashes
+                phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v, histogram_bytes = calculate_image_hashes(image_path)
+                logger.debug(f"图片特征计算完成: PHash={phash[:8]}..., HSV=({hsv_h},{hsv_s},{hsv_v}), 色相索引={hue_idx}, 明度={lightness}")
+            except Exception as e:
+                logger.warning(f"计算图片特征失败: {e}")
+                phash = '0' * 16
+                hsv_h, hsv_s, hsv_v = -1, 0, 0
+                hue_idx, lightness = -1, 0
+                histogram_bytes = None
+            
             return {
                 'ocr_text': ocr_text,
                 'filtered_text': filtered_text,
                 'emotion': emotion,
                 'emotion_positive': pos_score,
-                'emotion_negative': neg_score
+                'emotion_negative': neg_score,
+                'phash': phash,
+                'hsv_h': hsv_h,
+                'hsv_s': hsv_s,
+                'hsv_v': hsv_v,
+                'hue_idx': hue_idx,
+                'lightness': lightness,
+                'histogram': histogram_bytes
             }
         except Exception as e:
             logger.error(f"处理图片失败 {image_path}: {e}")
@@ -253,7 +272,14 @@ class OCRProcessor:
             'filtered_text': '',
             'emotion': '未分类',
             'emotion_positive': 0.0,
-            'emotion_negative': 0.0
+            'emotion_negative': 0.0,
+            'phash': '0' * 16,
+            'hsv_h': -1,
+            'hsv_s': 0,
+            'hsv_v': 0,
+            'hue_idx': -1,
+            'lightness': 0,
+            'histogram': None
         }
     
     # 保留向后兼容的属性访问
