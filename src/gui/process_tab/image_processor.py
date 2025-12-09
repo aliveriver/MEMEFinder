@@ -419,9 +419,10 @@ class ImageProcessor:
                                     self.log_message(f"[{index}/{total_imgs}] ✗ {filename} - {result.get('error', '未知错误')}")
                                 
                                 # 更新进度条
-                                progress = (index / total_imgs) * 100
+                                current_count = processed_count + error_count
+                                progress = (current_count / total_imgs) * 100
                                 self.ui_updaters['progress'](progress)
-                                self.ui_updaters['progress_label'](f"处理进度: {index}/{total_imgs}")
+                                self.ui_updaters['progress_label'](f"处理进度: {current_count}/{total_imgs}")
                     except Exception:
                         pass
                     
@@ -442,9 +443,10 @@ class ImageProcessor:
                                 else:
                                     error_count += 1
                                 
-                                progress = (index / total_imgs) * 100
+                                current_count = processed_count + error_count
+                                progress = (current_count / total_imgs) * 100
                                 self.ui_updaters['progress'](progress)
-                                self.ui_updaters['progress_label'](f"处理进度: {index}/{total_imgs}")
+                                self.ui_updaters['progress_label'](f"处理进度: {current_count}/{total_imgs}")
                     except Exception:
                         pass
                     
