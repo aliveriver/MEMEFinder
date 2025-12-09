@@ -171,8 +171,9 @@ class SearchToolbar:
                 command=self.callbacks['sort_mode_change']
             ).pack(side=tk.LEFT, padx=5)
             
+        # 将排序信息移到新的一行，避免影响上方按钮布局
         self.sort_info_label = ttk.Label(self.frame, text="(右键图片可选择'以此为参考排序')", foreground="gray")
-        self.sort_info_label.grid(row=2, column=4, columnspan=3, sticky=tk.W, padx=5, pady=5)
+        self.sort_info_label.grid(row=3, column=0, columnspan=8, sticky=tk.W, padx=5, pady=(0, 5))
         
     def update_sort_info(self, text, color="gray"):
         """更新排序信息"""

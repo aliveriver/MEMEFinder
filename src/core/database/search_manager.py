@@ -203,6 +203,106 @@ class SearchManager:
         logger.debug(f"分页查询: 第{page}页, 每页{page_size}条, 返回{len(results)}条")
         return results
     
+    def get_all_images_for_similarity(self, max_count: int = None, keyword: str = "", 
+                                     emotions: List[str] = None, source_ids: List[int] = None, 
+                                     tag_ids: List[int] = None, is_favorite: bool = None) -> List[Dict]:
+        """获取所有已处理图片用于相似度比较
+        
+        Args:
+            max_count: 最大返回数量，None表示不限制
+            keyword: 关键词
+            emotions: 情绪列表
+            source_ids: 图源ID列表
+            tag_ids: 标签ID列表
+            is_favorite: 是否收藏
+            
+        Returns:
+            包含图片信息的列表
+        """
+        with self.get_cursor() as cursor:
+            # 如果有标签筛选，需要 JOIN image_tags 表
+            if tag_ids:
+                query = """
+                    SELECT DISTINCT i.id, i.file_path, i.filtered_text, i.emotion, 
+                           i.emotion_positive, i.emotion_negative, i.processed, i.is_favorite, 
+                           i.source_id, i.emotion_manual, i.phash, i.hsv_h, i.hsv_s, i.hsv_v, 
+                           i.color_hue_idx, i.color_lightness, i.dl_features 
+                    FROM images i 
+                    INNER JOIN image_tags it ON i.id = it.image_id 
+                    WHERE i.processed = 1
+                """
+            else:
+                query = """
+                    SELECT id, file_path, filtered_text, emotion, 
+                           emotion_positive, emotion_negative, processed, is_favorite, 
+                           source_id, emotion_manual, phash, hsv_h, hsv_s, hsv_v, 
+                           color_hue_idx, color_lightness, dl_features 
+                    FROM images 
+                    WHERE processed = 1
+                """
+            
+            params = []
+            
+            # 标签筛选
+            if tag_ids:
+                placeholders = ','.join(['?' for _ in tag_ids])
+                query += f" AND it.tag_id IN ({placeholders})"
+                params.extend(tag_ids)
+            
+            # 关键词筛选
+            if keyword:
+                query += " AND (filtered_text LIKE ? OR ocr_text LIKE ?)" if not tag_ids else " AND (i.filtered_text LIKE ? OR i.ocr_text LIKE ?)"
+                params.extend([f"%{keyword}%", f"%{keyword}%"])
+            
+            # 情绪筛选
+            if emotions:
+                placeholders = ','.join(['?' for _ in emotions])
+                query += f" AND emotion IN ({placeholders})" if not tag_ids else f" AND i.emotion IN ({placeholders})"
+                params.extend(emotions)
+            
+            # 图源筛选
+            if source_ids:
+                placeholders = ','.join(['?' for _ in source_ids])
+                query += f" AND source_id IN ({placeholders})" if not tag_ids else f" AND i.source_id IN ({placeholders})"
+                params.extend(source_ids)
+            
+            # 收藏筛选
+            if is_favorite is not None:
+                query += " AND is_favorite = ?" if not tag_ids else " AND i.is_favorite = ?"
+                params.append(1 if is_favorite else 0)
+            
+            query += " ORDER BY added_time DESC" if not tag_ids else " ORDER BY i.added_time DESC"
+            
+            if max_count is not None and max_count > 0:
+                query += " LIMIT ?"
+                params.append(max_count)
+            
+            cursor.execute(query, params)
+            results = []
+            for row in cursor.fetchall():
+                results.append({
+                    'id': row[0],
+                    'file_path': row[1],
+                    'text': row[2],
+                    'emotion': row[3],
+                    'pos_score': row[4],
+                    'neg_score': row[5],
+                    'processed': bool(row[6]),
+                    'is_favorite': bool(row[7]),
+                    'source_id': row[8],
+                    'emotion_manual': bool(row[9]),
+                    'phash': row[10],
+                    'hsv_h': row[11],
+                    'hsv_s': row[12],
+                    'hsv_v': row[13],
+                    'color_hue_idx': row[14],
+                    'color_lightness': row[15],
+                    'dl_features': row[16]
+                })
+        
+        logger.info(f"获取了 {len(results)} 张图片用于相似度比较")
+        return results
+    
     def get_statistics(self) -> Dict:
         """获取统计信息"""
         with self.get_cursor() as cursor:

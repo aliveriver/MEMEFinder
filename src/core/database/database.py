@@ -179,6 +179,13 @@ class ImageDatabase:
         """获取统计信息"""
         return self._search_manager.get_statistics()
     
+    def get_all_images_for_similarity(self, max_count: int = None, keyword: str = "", 
+                                     emotions: list = None, source_ids: list = None, 
+                                     tag_ids: list = None, is_favorite: bool = None):
+        """获取所有已处理图片用于相似度比较"""
+        return self._search_manager.get_all_images_for_similarity(max_count, keyword, emotions, 
+                                                                 source_ids, tag_ids, is_favorite)
+    
     # ==================== 应用状态持久化（委托给 StateManager） ====================
     
     def set_app_state(self, key: str, value: str):

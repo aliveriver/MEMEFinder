@@ -82,7 +82,8 @@ class SearchTab:
         self.similarity_search = SimilaritySearch(
             parent_frame=self.frame,
             renderer=self.renderer,
-            sort_info_label=self.toolbar.sort_info_label
+            sort_info_label=self.toolbar.sort_info_label,
+            db=self.db
         )
         
         # 初始加载
@@ -188,6 +189,11 @@ class SearchTab:
     
     def refresh_page(self):
         """刷新页面"""
+        # 退出相似度搜索模式（如果处于该模式）
+        if hasattr(self, 'similarity_search') and self.similarity_search.is_similarity_mode:
+            self.similarity_search.exit_similarity_mode()
+            logger.info("刷新页面：退出相似度搜索模式，回到正常分页模式")
+        
         # 使用filters模块重新加载
         self.toolbar.filters.reload_all()
         
@@ -212,10 +218,14 @@ class SearchTab:
                 pass
             self._reload_after_id = None
         
-        # 清除相似度排序参考
-        self.similarity_reference = None
-        # 根据当前排序模式设置正确的排序说明文本
-        self._update_sort_info_label()
+        # 检查是否处于相似度搜索模式
+        is_similarity = hasattr(self, 'similarity_search') and self.similarity_search.is_similarity_mode
+        
+        if not is_similarity:
+            # 清除相似度排序参考（仅在非相似度模式下清除）
+            self.similarity_reference = None
+            # 根据当前排序模式设置正确的排序说明文本
+            self._update_sort_info_label()
         
         page = self.pager.get_current_page()
         page_size = self.pager.get_page_size()
@@ -234,32 +244,50 @@ class SearchTab:
         # 延迟GC
         self.frame.after(100, gc.collect)
         
-        # 计算总页数
-        total = self.db.get_images_count(
-            processed=1, keyword=keyword, emotions=emotions,
-            source_ids=source_ids, tag_ids=tag_ids, is_favorite=is_favorite
-        )
-        total_pages = max(1, (total + page_size - 1) // page_size)
-        
-        if page > total_pages:
-            page = total_pages
-            self.pager.set_current_page(page)
-        
-        # 更新分页控件
-        self.pager.update_display(total_pages, page)
-        
-        # 获取数据
-        self.all_results = self.db.get_images_page(
-            page=page, page_size=page_size, processed=1,
-            keyword=keyword, emotions=emotions, source_ids=source_ids,
-            tag_ids=tag_ids, is_favorite=is_favorite
-        )
+        if is_similarity:
+            # 相似度搜索模式：带过滤条件的相似度搜索
+            filters = {
+                'keyword': keyword,
+                'emotions': emotions,
+                'source_ids': source_ids,
+                'tag_ids': tag_ids,
+                'is_favorite': is_favorite
+            }
+            # 执行带过滤的相似度搜索
+            self.all_results = self.similarity_search.search_with_filters(filters)
+            
+            # 在相似度模式下，我们不使用标准分页，而是显示所有结果
+            # 更新分页控件显示为第1页/共1页
+            self.pager.update_display(1, 1)
+            
+        else:
+            # 正常模式：分页查询
+            # 计算总页数
+            total = self.db.get_images_count(
+                processed=1, keyword=keyword, emotions=emotions,
+                source_ids=source_ids, tag_ids=tag_ids, is_favorite=is_favorite
+            )
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            
+            if page > total_pages:
+                page = total_pages
+                self.pager.set_current_page(page)
+            
+            # 更新分页控件
+            self.pager.update_display(total_pages, page)
+            
+            # 获取数据
+            self.all_results = self.db.get_images_page(
+                page=page, page_size=page_size, processed=1,
+                keyword=keyword, emotions=emotions, source_ids=source_ids,
+                tag_ids=tag_ids, is_favorite=is_favorite
+            )
+            
+            # 应用排序（仅在非相似度模式下应用常规排序）
+            self._apply_sort()
         
         # 保存原始结果
         self.original_results = self.all_results.copy()
-        
-        # 应用排序
-        self._apply_sort()
         
         # 重新加载favorite_cache，确保收藏状态是最新的
         self.favorite_cache = {}
