@@ -214,6 +214,22 @@ a = Analysis(
         'pandas',  # 数据分析框架 - 约17MB
         'sklearn', 'scikit-learn',  # 机器学习库 - 约30MB，已用纯numpy实现
         'skimage', 'scikit-image',  # 图像处理库 - 约20MB，已用OpenCV替代
+        # 深度学习框架（项目不使用）
+        'paddle', 'paddlepaddle', 'paddlex',  # PaddlePaddle框架 - 约783MB！
+        'torch', 'pytorch', 'torchvision', 'torchaudio',  # PyTorch框架 - 约310MB
+        'tensorflow', 'tf',  # TensorFlow框架
+        'jax', 'flax',  # JAX框架
+        # Hugging Face 生态（项目不使用）
+        'transformers',  # Transformers库 - 约50MB
+        'datasets',  # Datasets库
+        'tokenizers',  # 分词器
+        # 其他不必要的库
+        'dask',  # 并行计算库
+        'xarray',  # 多维数组库
+        'zarr',  # 数组存储格式
+        'h5py',  # HDF5文件支持
+        'tables',  # PyTables（HDF5支持）
+        'fastparquet',  # Parquet文件支持
         # 注意：不能排除snownlp本身，但可以通过hooks排除其数据文件
     ],
     win_no_prefer_redirects=False,
