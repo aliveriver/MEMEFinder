@@ -409,12 +409,10 @@ class SearchTab:
         """刷新页面"""
         self._load_sources()
         self._load_tags()
-        # 清除排序提示，重置为默认状态
+        # 清除相似度排序参考
         self.similarity_reference = None
-        self.sort_info_label.config(
-            text="(右键图片可选择'以此为参考排序')",
-            foreground="gray"
-        )
+        # 根据当前排序模式设置正确的排序说明文本
+        self._update_sort_info_label()
         self.load_page()
         # 刷新详情面板（如果正在显示某张图片）
         self.detail_panel.refresh()
@@ -428,9 +426,10 @@ class SearchTab:
                 pass
             self._reload_after_id = None
         
-        # 清除排序参考和提示
+        # 清除相似度排序参考
         self.similarity_reference = None
-        self.sort_info_label.config(text="", foreground="black")
+        # 根据当前排序模式设置正确的排序说明文本
+        self._update_sort_info_label()
         
         page = max(1, int(self.page_var.get()))
         page_size = int(self.page_size_var.get())
@@ -668,15 +667,20 @@ class SearchTab:
     
     def _on_sort_mode_change(self):
         """排序模式变化"""
+        # 更新排序说明文本
+        self._update_sort_info_label()
+        
+        # 应用排序
+        self._apply_sort()
+    
+    def _update_sort_info_label(self):
+        """根据当前排序模式更新排序说明文本"""
         mode = self.sort_mode_var.get()
         
         if mode == "time":
             self.sort_info_label.config(text="(右键图片可选择'以此为参考排序')", foreground="gray")
         elif mode == "color":
             self.sort_info_label.config(text="(将颜色相近的图片聚集在一起)", foreground="blue")
-        
-        # 应用排序
-        self._apply_sort()
     
     def _apply_sort(self):
         """应用当前排序模式"""
@@ -688,7 +692,10 @@ class SearchTab:
         if mode == "color":
             # 按颜色聚类排序
             self.all_results = ImageSorter.sort_by_color(self.all_results)
-        # time模式不需要重新排序，数据库已经按时间排序
+        elif mode == "time":
+            # 恢复原始的时间排序（从数据库获取的顺序）
+            if hasattr(self, 'original_results') and self.original_results:
+                self.all_results = self.original_results.copy()
         # similarity模式通过右键菜单触发
         
         # 重新渲染

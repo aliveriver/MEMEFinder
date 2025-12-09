@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 from pathlib import Path
 from typing import Tuple, Optional
-from skimage import color
 
 
 class ImageHashCalculator:
@@ -67,7 +66,7 @@ class ImageHashCalculator:
     @staticmethod
     def rgb_to_lch(rgb: np.ndarray) -> Tuple[float, float, float]:
         """
-        将RGB转换为LCh色彩空间
+        将RGB转换为LCh色彩空间（使用OpenCV实现，无需scikit-image）
         
         Args:
             rgb: RGB值数组 [R, G, B]，范围0-255
@@ -78,12 +77,18 @@ class ImageHashCalculator:
             - C: 色度/饱和度 (0-100+)
             - h: 色相角 (0-360度)
         """
-        # 归一化到0-1
-        rgb_normalized = rgb / 255.0
+        # RGB -> Lab (使用OpenCV)
+        # OpenCV需要BGR格式，并且范围0-255
+        bgr = np.array([[[rgb[2], rgb[1], rgb[0]]]], dtype=np.uint8)
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2Lab)
+        L, a, b = lab[0][0]
         
-        # RGB -> Lab
-        lab = color.rgb2lab([[rgb_normalized]])[0][0]
-        L, a, b = lab
+        # Lab值需要转换：
+        # L: 0-255 -> 0-100
+        # a, b: 0-255 -> -128-127
+        L = L * 100.0 / 255.0
+        a = a - 128
+        b = b - 128
         
         # Lab -> LCh
         C = np.sqrt(a**2 + b**2)
