@@ -50,8 +50,8 @@ class ImageScanner:
         new_images = []
         
         for img_path in all_images:
-            # 使用绝对路径的字符串形式进行比较
-            img_path_str = str(img_path.absolute())
+            # 使用os.path.abspath规范化路径，确保与数据库中的格式一致
+            img_path_str = os.path.abspath(str(img_path))
             if img_path_str not in existing_paths:
                 new_images.append(img_path)
                 existing_paths.add(img_path_str)

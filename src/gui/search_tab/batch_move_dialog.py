@@ -189,14 +189,17 @@ class BatchMoveDialog(tk.Toplevel):
         
         for old_path in self.file_paths:
             try:
+                # 规范化旧路径
+                old_path = os.path.abspath(old_path)
+                
                 if not os.path.exists(old_path):
                     failed_count += 1
                     failed_files.append(f"{Path(old_path).name}: 文件不存在")
                     continue
                 
-                # 生成新路径
+                # 生成新路径（确保使用规范化的绝对路径）
                 filename = Path(old_path).name
-                new_path = os.path.join(target_path, filename)
+                new_path = os.path.abspath(os.path.join(target_path, filename))
                 
                 # 如果目标已存在，添加序号
                 if os.path.exists(new_path):
@@ -205,13 +208,13 @@ class BatchMoveDialog(tk.Toplevel):
                     counter = 1
                     while os.path.exists(new_path):
                         new_filename = f"{base_name}_{counter}{ext}"
-                        new_path = os.path.join(target_path, new_filename)
+                        new_path = os.path.abspath(os.path.join(target_path, new_filename))
                         counter += 1
                 
                 # 移动文件
                 shutil.move(old_path, new_path)
                 
-                # 更新数据库
+                # 更新数据库（使用规范化的路径）
                 with self.db.get_cursor(commit=True) as cursor:
                     cursor.execute("""
                         UPDATE images 
@@ -456,8 +459,9 @@ class CreateSourceDialog(tk.Toplevel):
             # 创建文件夹
             os.makedirs(full_path, exist_ok=True)
             
-            # 添加到数据库
-            success = self.db.add_source(full_path)
+            # 规范化路径后添加到数据库
+            normalized_path = os.path.abspath(full_path)
+            success = self.db.add_source(normalized_path)
             
             if not success:
                 messagebox.showerror("错误", "图源已在数据库中存在")
@@ -466,14 +470,15 @@ class CreateSourceDialog(tk.Toplevel):
                     os.rmdir(full_path)
                 return
             
-            # 获取新创建的图源ID
+            # 获取新创建的图源ID（使用规范化路径比较）
             sources = self.db.get_all_sources()
             for source in sources:
-                if source['folder_path'] == full_path:
+                # 规范化两个路径再进行比较
+                if os.path.abspath(source['folder_path']) == normalized_path:
                     self.created_source_id = source['id']
                     break
             
-            messagebox.showinfo("成功", f"已创建新图源：\n{full_path}")
+            messagebox.showinfo("成功", f"已创建新图源：\n{normalized_path}")
             self.destroy()
         
         except PermissionError:

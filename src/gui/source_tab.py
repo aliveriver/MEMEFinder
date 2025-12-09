@@ -294,7 +294,7 @@ class SourceTab:
             
             # 批量添加
             if new_images:
-                batch_data = [(str(img_path.absolute()), source_id) for img_path in new_images]
+                batch_data = [(os.path.abspath(str(img_path)), source_id) for img_path in new_images]
                 added = self.db.add_images_batch(batch_data)
                 total_new += added
             
@@ -341,7 +341,7 @@ class SourceTab:
             
             # 批量添加到数据库（优化性能）
             if new_images:
-                batch_data = [(str(img_path.absolute()), source['id']) for img_path in new_images]
+                batch_data = [(os.path.abspath(str(img_path)), source['id']) for img_path in new_images]
                 added = self.db.add_images_batch(batch_data)
                 total_new += added
             

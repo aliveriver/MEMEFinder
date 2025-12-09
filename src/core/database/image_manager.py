@@ -39,6 +39,10 @@ class ImageManager:
     
     def add_image(self, file_path: str, source_id: int, phash: str = None, hsv_h: int = None) -> bool:
         """添加新图片（哈希值可选，将在OCR处理时更新）"""
+        import os
+        # 规范化路径格式，确保数据库中路径一致性
+        file_path = os.path.abspath(file_path)
+        
         try:
             with self.get_cursor(commit=True) as cursor:
                 cursor.execute("""
@@ -66,32 +70,36 @@ class ImageManager:
         current_time = datetime.now().isoformat()
         
         try:
+            import os
+            # 规范化所有路径，确保格式一致
+            normalized_images = [(os.path.abspath(fp), sid) for fp, sid in images]
+            
             with self.get_cursor(commit=True) as cursor:
-                # 准备批量插入数据
-                data = [(fp, sid, current_time) for fp, sid in images]
+                # 先查询哪些路径已存在
+                existing_paths = set()
+                for fp, sid in normalized_images:
+                    cursor.execute("SELECT file_path FROM images WHERE file_path = ?", (fp,))
+                    if cursor.fetchone():
+                        existing_paths.add(fp)
                 
-                logger.debug(f"准备插入 {len(data)} 条记录")
-                logger.debug(f"第一条数据: {data[0]}")
+                logger.debug(f"准备插入 {len(normalized_images)} 条记录，其中 {len(existing_paths)} 条已存在")
                 
-                # 使用executemany进行批量插入
+                # 准备批量插入数据（使用规范化后的路径）
+                data = [(fp, sid, current_time) for fp, sid in normalized_images]
+                
+                # 使用executemany进行批量插入（已存在的会被IGNORE）
                 cursor.executemany("""
                     INSERT OR IGNORE INTO images (file_path, source_id, added_time)
                     VALUES (?, ?, ?)
                 """, data)
                 
-                logger.debug(f"executemany rowcount: {cursor.rowcount}")
-                
-                # executemany的rowcount不可靠，需要手动计算
-                # 查询实际插入的数量
-                added_count = 0
-                for fp, sid in images:
-                    cursor.execute("SELECT id FROM images WHERE file_path = ?", (fp,))
-                    if cursor.fetchone():
-                        added_count += 1
-                
-                logger.debug(f"实际查询到 {added_count} 条记录")
+                # 计算实际新增的数量
+                added_count = len(normalized_images) - len(existing_paths)
             
-            logger.info(f"批量添加图片: {added_count}/{len(images)} 张")
+            if added_count > 0:
+                logger.info(f"批量添加图片: {added_count}/{len(normalized_images)} 张")
+            else:
+                logger.debug(f"批量添加图片: {added_count}/{len(normalized_images)} 张 (全部已存在)")
             return added_count
         except Exception as e:
             logger.error(f"批量添加图片失败: {e}")

@@ -81,7 +81,8 @@ class SimilaritySearch:
                 ]
             )
             if file_path:
-                selected_path[0] = file_path
+                # 规范化路径格式
+                selected_path[0] = os.path.abspath(file_path)
                 choice_dialog.destroy()
         
         def select_from_clipboard():
@@ -97,7 +98,8 @@ class SimilaritySearch:
                 img.save(temp_file.name)
                 temp_file.close()
                 
-                selected_path[0] = temp_file.name
+                # 规范化路径格式
+                selected_path[0] = os.path.abspath(temp_file.name)
                 choice_dialog.destroy()
             except Exception as e:
                 messagebox.showerror("错误", f"从剪贴板获取图片失败：{e}")
