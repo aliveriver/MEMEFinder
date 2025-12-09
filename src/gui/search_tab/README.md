@@ -6,29 +6,37 @@
 
 ```
 search_tab/
-├── __init__.py                # 模块导出
-├── search_tab.py              # 主标签页类（整合所有功能）
-├── checkbox_dropdown.py       # 复选框下拉菜单组件
-├── detail_panel.py            # 图片详情面板
-├── canvas_renderer.py         # Canvas渲染器（虚拟化列表）
-├── event_handlers.py          # 事件处理器
-├── context_menu.py            # 右键上下文菜单
-├── batch_tag_editor.py        # 批量标签编辑对话框
-├── batch_emotion_editor.py    # 批量情感编辑对话框
-├── batch_move_dialog.py       # 批量移动到图源对话框
-└── README.md                  # 本文档
+├── __init__.py                     # 模块导出
+├── search_tab.py                   # 主标签页类（整合所有功能）
+├── search_toolbar.py               # 搜索工具栏（关键词、排序、以图搜图）
+├── search_filters.py               # 搜索筛选器（情感、图源、标签、收藏）
+├── similarity_search.py            # 以图搜图功能
+├── similarity_settings_dialog.py   # 相似度设置对话框
+├── checkbox_dropdown.py            # 复选框下拉菜单组件
+├── pagination_control.py           # 分页控制组件
+├── canvas_renderer.py              # Canvas渲染器（虚拟化列表）
+├── detail_panel.py                 # 图片详情面板
+├── detail_widgets.py               # 详情面板组件
+├── event_handlers.py               # 事件处理器
+├── context_menu.py                 # 右键上下文菜单
+├── batch_tag_editor.py             # 批量标签编辑对话框
+├── batch_emotion_editor.py         # 批量情感编辑对话框
+├── batch_move_dialog.py            # 批量移动到图源对话框
+├── tag_selector_dialog.py          # 标签选择对话框
+├── icon_manager.py                 # 图标管理器
+└── README.md                       # 本文档
 ```
 
 ## 📋 各模块职责
 
-### 1. `search_tab.py` - 主标签页类 (~500行)
+### 1. `search_tab.py` - 主标签页类 (~400行)
 - **职责**：整合所有功能，协调各个组件
 - **主要功能**：
-  - 创建UI布局（搜索条件、标签管理按钮、分页控件）
-  - 管理搜索条件和多维度筛选（关键词、情感、图源、收藏、标签）
-  - 分页控制和数据加载
+  - 整合工具栏、筛选器、渲染器、详情面板等子模块
+  - 管理搜索状态和数据加载
+  - 协调各模块间的交互
   - favorite_cache 管理（从数据库实时加载）
-  - 详情面板刷新控制
+  - 相似度搜索和排序状态管理
 - **使用**：
   ```python
   from src.gui.search_tab import SearchTab
@@ -36,7 +44,68 @@ search_tab/
   tab = SearchTab(parent, db)
   ```
 
-### 2. `checkbox_dropdown.py` - 复选框下拉菜单 (~190行)
+### 2. `search_toolbar.py` - 搜索工具栏 (~180行)
+- **职责**：提供搜索相关的工具栏功能
+- **主要功能**：
+  - 关键词搜索输入框和搜索按钮
+  - 排序方式下拉菜单（无排序、深度学习、PHash、混合、颜色）
+  - 以图搜图按钮和菜单
+  - 刷新按钮
+  - 管理标签按钮
+- **特点**：
+  - 独立的工具栏组件
+  - 通过回调函数与主类通信
+
+### 3. `search_filters.py` - 搜索筛选器 (~150行)
+- **职责**：提供多维度筛选功能
+- **主要功能**：
+  - 情感筛选下拉菜单（正向/负向/中性/未分类）
+  - 图源筛选下拉菜单
+  - 标签筛选下拉菜单
+  - 只看收藏复选框
+- **特点**：
+  - 使用 CheckboxDropdown 组件
+  - 筛选条件变化自动触发搜索
+
+### 4. `similarity_search.py` - 以图搜图功能 (~500行)
+- **职责**：实现以图搜图和相似度排序
+- **主要功能**：
+  - 三种搜索方式：
+    - 选择本地图片
+    - 粘贴剪贴板图片
+    - 使用当前选中图片
+  - 混合相似度算法（深度学习 + PHash）
+  - 相似度阈值和数量限制
+  - 配置持久化（保存到 version_config.json）
+- **特点**：
+  - 支持权重自定义
+  - 支持相似度过滤
+  - 自动计算和排序
+
+### 5. `similarity_settings_dialog.py` - 相似度设置对话框 (~200行)
+- **职责**：配置以图搜图参数
+- **主要功能**：
+  - 深度学习权重滑块（0.0-1.0）
+  - PHash 权重滑块（0.0-1.0）
+  - 最小相似度阈值设置
+  - 最大比较数量设置
+  - 恢复默认设置
+- **特点**：
+  - 实时预览权重分配
+  - 参数验证和提示
+
+### 6. `pagination_control.py` - 分页控制组件 (~120行)
+- **职责**：提供分页导航功能
+- **主要功能**：
+  - 每页数量选择（10/20/50/100）
+  - 缩略图大小滑块
+  - 上一页/下一页按钮
+  - 页码显示和跳转
+- **特点**：
+  - 独立的分页组件
+  - 状态变化触发回调
+
+### 7. `checkbox_dropdown.py` - 复选框下拉菜单 (~190行)
 - **职责**：提供多选下拉菜单控件
 - **主要功能**：
   - 下拉菜单显示/隐藏（坐标检测点击外部）
@@ -48,11 +117,11 @@ search_tab/
   - 使用坐标检测避免FocusOut误关闭
   - 支持延迟关闭（100ms）
 
-### 3. `detail_panel.py` - 详情面板 (~560行)
+### 8. `detail_panel.py` - 详情面板 (~500行)
 - **职责**：显示和编辑图片详细信息
 - **主要功能**：
   - 显示图片缩略图
-  - 显示文件信息（路径、时间、大小等）
+  - 显示文件信息（路径、时间、大小、颜色信息）
   - 编辑OCR文本（可保存）
   - 编辑情绪标签（正向/负向/中性/未分类）
   - 收藏状态切换（爱心按钮）
@@ -61,10 +130,21 @@ search_tab/
   - **自动刷新功能**（`refresh()` 方法）
 - **交互**：通过回调函数与主类通信
 - **新增**：
+  - 显示图片颜色信息（RGB、HSV、主色调）
   - `current_file_path` - 记录当前显示的图片
   - `refresh()` - 重新加载当前图片详情
 
-### 4. `canvas_renderer.py` - Canvas渲染器 (~450行)
+### 9. `detail_widgets.py` - 详情面板组件 (~150行)
+- **职责**：详情面板的可复用组件
+- **主要功能**：
+  - 可编辑文本框组件
+  - 标签显示组件
+  - 文件信息展示组件
+- **特点**：
+  - 组件化设计
+  - 便于复用和维护
+
+### 10. `canvas_renderer.py` - Canvas渲染器 (~450行)
 - **职责**：高性能虚拟化列表渲染
 - **主要功能**：
   - 虚拟化渲染（只渲染可见项）
@@ -78,7 +158,7 @@ search_tab/
   - 选中状态显示（蓝色边框）
 - **优化**：使用虚拟化技术，支持大量图片流畅显示
 
-### 5. `event_handlers.py` - 事件处理器 (~260行)
+### 11. `event_handlers.py` - 事件处理器 (~260行)
 - **职责**：处理用户交互事件
 - **主要功能**：
   - 鼠标点击（单击、双击、右键）
@@ -90,7 +170,7 @@ search_tab/
   - **右键菜单触发**
 - **解耦**：将事件处理逻辑从主类中分离
 
-### 6. `context_menu.py` - 右键上下文菜单 (~235行)
+### 12. `context_menu.py` - 右键上下文菜单 (~235行)
 - **职责**：处理多选图片的批量操作
 - **主要功能**：
   - 显示选中图片数量
@@ -103,7 +183,7 @@ search_tab/
   - 菜单项根据选中项状态动态显示
   - 所有操作完成后刷新页面
 
-### 7. `batch_tag_editor.py` - 批量标签编辑 (~313行)
+### 13. `batch_tag_editor.py` - 批量标签编辑 (~313行)
 - **职责**：批量编辑图片标签
 - **主要功能**：
   - 三种操作模式：
@@ -116,7 +196,7 @@ search_tab/
   - 应用和取消按钮
 - **窗口大小**：550x550（确保所有按钮可见）
 
-### 8. `batch_emotion_editor.py` - 批量情感编辑 (~113行)
+### 14. `batch_emotion_editor.py` - 批量情感编辑 (~113行)
 - **职责**：批量设置图片情感标签
 - **主要功能**：
   - 四种情感选择：正向/负向/中性/未分类
@@ -124,7 +204,7 @@ search_tab/
   - 应用和取消按钮
 - **窗口大小**：450x350（优化布局）
 
-### 9. `batch_move_dialog.py` - 批量移动对话框 (~222行)
+### 15. `batch_move_dialog.py` - 批量移动对话框 (~222行)
 - **职责**：将图片批量转移到指定图源
 - **主要功能**：
   - 显示所有可用图源
@@ -136,16 +216,40 @@ search_tab/
   - 自动处理文件路径
   - 显示操作结果统计
 
+### 16. `tag_selector_dialog.py` - 标签选择对话框 (~180行)
+- **职责**：提供标签多选界面
+- **主要功能**：
+  - 显示所有可用标签（带颜色）
+  - 多选标签
+  - 搜索过滤标签
+  - 确定和取消按钮
+- **特点**：
+  - 用于详情面板添加标签
+  - 支持标签搜索
+
+### 17. `icon_manager.py` - 图标管理器 (~100行)
+- **职责**：管理界面图标资源
+- **主要功能**：
+  - 收藏图标（实心/空心）
+  - 选中状态图标
+  - 图标缓存管理
+- **特点**：
+  - 集中管理图标资源
+  - 避免重复创建
+
 ## 🎯 设计优势
 
 ### 1. **单一职责原则**
 每个模块只负责一个特定领域：
-- UI组件（checkbox_dropdown）
+- 搜索功能（search_toolbar、search_filters）
+- 相似度搜索（similarity_search、similarity_settings_dialog）
+- UI组件（checkbox_dropdown、pagination_control）
 - 渲染（canvas_renderer）
 - 事件处理（event_handlers）
-- 详情显示（detail_panel）
+- 详情显示（detail_panel、detail_widgets）
 - 批量操作对话框（batch_*）
 - 右键菜单（context_menu）
+- 图标管理（icon_manager）
 - 整体协调（search_tab）
 
 ### 2. **高内聚低耦合**
@@ -358,15 +462,31 @@ EventHandlers 捕获点击事件
 
 | 模块 | 行数 | 占比 |
 |-----|------|------|
-| 原 search_tab.py | ~1800 | 100% |
-| 新 search_tab.py | ~450 | 25% |
-| checkbox_dropdown.py | ~170 | 9% |
-| detail_panel.py | ~450 | 25% |
-| canvas_renderer.py | ~450 | 25% |
-| event_handlers.py | ~250 | 14% |
-| **总计** | **~1770** | **98%** |
+| 原 search_tab.py | ~2500 | 100% |
+| 新 search_tab.py | ~400 | 16% |
+| search_toolbar.py | ~180 | 7% |
+| search_filters.py | ~150 | 6% |
+| similarity_search.py | ~500 | 20% |
+| similarity_settings_dialog.py | ~200 | 8% |
+| checkbox_dropdown.py | ~190 | 8% |
+| pagination_control.py | ~120 | 5% |
+| detail_panel.py | ~500 | 20% |
+| detail_widgets.py | ~150 | 6% |
+| canvas_renderer.py | ~450 | 18% |
+| event_handlers.py | ~260 | 10% |
+| context_menu.py | ~235 | 9% |
+| batch_tag_editor.py | ~313 | 13% |
+| batch_emotion_editor.py | ~113 | 5% |
+| batch_move_dialog.py | ~222 | 9% |
+| tag_selector_dialog.py | ~180 | 7% |
+| icon_manager.py | ~100 | 4% |
+| **总计** | **~4263** | **170%** |
 
-**结果**：拆分后总行数略少（得益于去除重复代码），但可读性和维护性大幅提升！
+**说明**：
+- 总行数增加是因为新增了以图搜图、排序等重要功能
+- 原有功能更加模块化，每个文件职责清晰
+- 可读性和维护性大幅提升
+- 新功能易于添加和测试
 
 ## 🔧 使用示例
 
