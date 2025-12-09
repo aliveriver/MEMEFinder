@@ -34,12 +34,22 @@
 - **图片扫描**：递归扫描支持格式（jpg/png/bmp/webp/gif/tiff），自动 MD5 去重与增量扫描  
 - **OCR 识别（可选）**：使用 *RapidOCR* 提取图片文字并保存到数据库  
 - **情绪分析（可选）**：使用 *SnowNLP* (中文) / *TextBlob* (英文) 对提取文本进行情绪分类  
+- **深度学习特征提取**：使用 MobileNetV3 提取图片特征，支持以图搜图和智能排序
 
 ### 搜索与管理
 - **关键词搜索**：通过 OCR 识别的文本搜索表情包
+- **🖼️ 以图搜图**：支持本地图片、粘贴板图片和已有图片的相似度搜索
+  - 混合相似度算法（深度学习特征 + PHash）
+  - 可自定义权重和阈值
+  - 支持最大比较数量限制
+- **📊 智能排序**：多种排序方式
+  - 深度学习相似度排序
+  - PHash相似度排序
+  - 混合相似度排序（可调权重）
+  - RGB颜色排序（按主色调分组）
 - **多维度筛选**：支持情感、图源、收藏状态、标签筛选
 - **分页显示**：可调整每页显示数量（10/20/50/100）
-- **详情查看**：点击图片查看详细信息（OCR文本、情感、标签、文件信息）
+- **详情查看**：点击图片查看详细信息（OCR文本、情感、标签、文件信息、颜色信息）
 
 ### 高级功能
 - **🏷️ 自定义标签系统**：
@@ -172,14 +182,47 @@ python scripts/package_all.py
 2. 在搜索条件区勾选「❤ 只看收藏」
 3. 只显示已收藏的图片
 
+#### 以图搜图
+1. 点击搜索工具栏的「📷 以图搜图」按钮
+2. 选择搜索方式：
+   - **选择本地图片**：从文件系统选择参考图片
+   - **粘贴图片**：使用剪贴板中的图片（截图后直接粘贴）
+   - **使用当前选中图片**：使用已选中的图片作为参考
+3. 系统会根据相似度排序显示结果
+4. 可在「⚙️ 以图搜图设置」中调整：
+   - 相似度算法权重（深度学习/PHash）
+   - 最小相似度阈值
+   - 最大比较数量
+
+#### 智能排序
+1. 在搜索工具栏选择排序方式：
+   - **深度学习排序**：基于深度学习特征的智能相似度
+   - **PHash排序**：基于感知哈希的相似度
+   - **混合排序**：结合两种算法（可调权重）
+   - **颜色排序**：按RGB主色调分组排序
+2. 选择参考图片后应用排序
+3. 排序信息会显示在界面顶部
+
 ---
 
 ## 开发与项目结构
 
     src/
     ├── core/                # 核心逻辑
-    │   ├── database.py      # 数据库管理
     │   ├── scanner.py       # 文件扫描
+    │   ├── image_hash.py    # 图片哈希和颜色特征计算（PHash/RGB/DL特征）
+    │   ├── dl_model_manager.py      # 深度学习模型管理器
+    │   ├── dl_feature_extractor.py  # 深度学习特征提取器
+    │   ├── database/        # 数据库模块（模块化设计）
+    │   │   ├── database.py          # 主数据库类
+    │   │   ├── connection_pool.py   # 连接池管理
+    │   │   ├── schema.py            # 数据库表结构
+    │   │   ├── source_manager.py    # 图源管理
+    │   │   ├── image_manager.py     # 图片操作
+    │   │   ├── search_manager.py    # 搜索查询
+    │   │   ├── image_sorter.py      # 图片排序（相似度/颜色）
+    │   │   ├── state_manager.py     # 应用状态
+    │   │   └── tag_manager.py       # 标签管理
     │   └── ocr/             # OCR 模块（模块化设计）
     │       ├── ocr_engine.py        # OCR 引擎封装
     │       ├── processor.py         # OCR 处理器主入口
@@ -188,23 +231,40 @@ python scripts/package_all.py
     ├── gui/                 # 图形界面
     │   ├── main_window.py   # 主窗口
     │   ├── source_tab.py    # 图源管理页
+    │   ├── loading_window.py # 加载窗口
+    │   ├── tag_manager_dialog.py # 标签管理对话框
     │   ├── process_tab/     # 图片处理页（模块化）
-    │   │   ├── process_tab.py       # 主协调器
-    │   │   ├── process_tab_ui.py    # UI 组件
-    │   │   ├── process_tab_models.py # 模型管理
-    │   │   ├── process_tab_gpu.py   # GPU 管理
-    │   │   └── process_tab_processor.py # 处理逻辑
-    │   ├── search_tab.py    # 图片搜索页
-    │   └── loading_window.py # 加载窗口
+    │   │   ├── main.py              # 主标签页类
+    │   │   ├── gpu.py               # GPU检测
+    │   │   ├── image_processor.py   # 图片处理器
+    │   │   └── memory_utils.py      # 内存管理
+    │   └── search_tab/      # 图片搜索页（模块化）
+    │       ├── search_tab.py        # 主协调器
+    │       ├── search_toolbar.py    # 搜索工具栏
+    │       ├── search_filters.py    # 搜索过滤器
+    │       ├── similarity_search.py # 以图搜图
+    │       ├── similarity_settings_dialog.py # 相似度设置对话框
+    │       ├── canvas_renderer.py   # 虚拟化渲染
+    │       ├── detail_panel.py      # 详情面板
+    │       ├── detail_widgets.py    # 详情组件
+    │       ├── event_handlers.py    # 事件处理
+    │       ├── context_menu.py      # 右键菜单
+    │       ├── batch_tag_editor.py  # 批量标签编辑
+    │       ├── batch_emotion_editor.py # 批量情感编辑
+    │       ├── batch_move_dialog.py # 批量移动对话框
+    │       ├── tag_selector_dialog.py # 标签选择对话框
+    │       ├── checkbox_dropdown.py # 复选框下拉菜单
+    │       ├── pagination_control.py # 分页控制
+    │       └── icon_manager.py      # 图标管理
     └── utils/               # 工具模块
         ├── logger.py        # 日志记录
         ├── resource_path.py # 资源路径管理
         ├── model_manager.py # 模型管理
+        ├── resource_monitor.py # 资源监控
         ├── gpu_detector.py  # GPU 检测
         ├── gpu_installer.py # GPU 安装配置
         ├── cuda_finder.py   # CUDA 路径查找
-        ├── cuda_validator.py # CUDA 验证
-        └── resource_monitor.py # 资源监控
+        └── cuda_validator.py # CUDA 验证
 
 ---
 

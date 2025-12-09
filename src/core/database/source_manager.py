@@ -28,6 +28,10 @@ class SourceManager:
     
     def add_source(self, folder_path: str) -> bool:
         """添加图源文件夹"""
+        import os
+        # 规范化路径格式
+        folder_path = os.path.abspath(folder_path)
+        
         try:
             with self.get_cursor(commit=True) as cursor:
                 cursor.execute("""

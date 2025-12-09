@@ -100,13 +100,20 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
                 elif not enable_ocr:
                     # 不启用OCR时直接写入空数据
                     with db_lock:
-                        db.update_image_data(
+                        self.db.update_image_data(
                             image_id=img_id,
                             ocr_text='',
                             filtered_text='',
                             emotion='未处理',
                             pos_score=0.0,
-                            neg_score=0.0
+                            neg_score=0.0,
+                            phash=None,
+                            hsv_h=None,
+                            hsv_s=None,
+                            hsv_v=None,
+                            hue_idx=None,
+                            lightness=None,
+                            dl_features=None
                         )
                     
                     result = {
@@ -133,7 +140,14 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
                             filtered_text=ocr_result['filtered_text'],
                             emotion=ocr_result['emotion'],
                             pos_score=ocr_result['emotion_positive'],
-                            neg_score=ocr_result['emotion_negative']
+                            neg_score=ocr_result['emotion_negative'],
+                            phash=ocr_result.get('phash'),
+                            hsv_h=ocr_result.get('hsv_h'),
+                            hsv_s=ocr_result.get('hsv_s'),
+                            hsv_v=ocr_result.get('hsv_v'),
+                            hue_idx=ocr_result.get('hue_idx'),
+                            lightness=ocr_result.get('lightness'),
+                            dl_features=ocr_result.get('dl_features')
                         )
                     
                     result = {
@@ -293,7 +307,14 @@ def _process_image_worker(img_info, enable_ocr, enable_sentiment, use_gpu, db_pa
                 filtered_text='',
                 emotion='未处理',
                 pos_score=0.0,
-                neg_score=0.0
+                neg_score=0.0,
+                phash=None,
+                hsv_h=None,
+                hsv_s=None,
+                hsv_v=None,
+                hue_idx=None,
+                lightness=None,
+                dl_features=None
             )
             db.close()
             
@@ -337,7 +358,14 @@ def _process_image_worker(img_info, enable_ocr, enable_sentiment, use_gpu, db_pa
             filtered_text=result['filtered_text'],
             emotion=result['emotion'],
             pos_score=result['emotion_positive'],
-            neg_score=result['emotion_negative']
+            neg_score=result['emotion_negative'],
+            phash=result.get('phash'),
+            hsv_h=result.get('hsv_h'),
+            hsv_s=result.get('hsv_s'),
+            hsv_v=result.get('hsv_v'),
+            hue_idx=result.get('hue_idx'),
+            lightness=result.get('lightness'),
+            dl_features=result.get('dl_features')
         )
         db.close()
         

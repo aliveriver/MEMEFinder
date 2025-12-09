@@ -16,7 +16,8 @@ class ContextMenu:
     """右键菜单处理器"""
     
     def __init__(self, parent, db, get_selected_items_func, 
-                 get_favorite_cache_func, refresh_callback):
+                 get_favorite_cache_func, refresh_callback, 
+                 sort_by_similarity_callback=None, icons=None):
         """
         Args:
             parent: 父窗口
@@ -24,12 +25,16 @@ class ContextMenu:
             get_selected_items_func: 获取选中项的函数
             get_favorite_cache_func: 获取收藏缓存的函数
             refresh_callback: 刷新页面的回调
+            sort_by_similarity_callback: 以某图为参考排序的回调
+            icons: 图标字典
         """
         self.parent = parent
         self.db = db
         self.get_selected_items = get_selected_items_func
         self.get_favorite_cache = get_favorite_cache_func
         self.refresh_callback = refresh_callback
+        self.sort_by_similarity_callback = sort_by_similarity_callback
+        self.icons = icons or {}
         
         # 创建菜单
         self.menu = Menu(parent, tearoff=0)
@@ -68,39 +73,62 @@ class ContextMenu:
         
         if need_favorite:
             self.menu.add_command(
-                label="❤ 收藏",
+                label=" 收藏",
+                image=self.icons.get('favorite'),
+                compound='left',
                 command=lambda: self._batch_favorite(selected_items)
             )
         
         if need_unfavorite:
             self.menu.add_command(
-                label="💔 取消收藏",
+                label=" 取消收藏",
+                image=self.icons.get('unfavorite'),
+                compound='left',
                 command=lambda: self._batch_unfavorite(selected_items)
             )
         
         # 编辑标签
         self.menu.add_command(
-            label="🏷️ 编辑标签",
+            label=" 编辑标签",
+            image=self.icons.get('tag'),
+            compound='left',
             command=lambda: self._batch_edit_tags(selected_items)
         )
         
         # 编辑情感
         self.menu.add_command(
-            label="😊 编辑情感",
+            label=" 编辑情感",
+            image=self.icons.get('emotion'),
+            compound='left',
             command=lambda: self._batch_edit_emotion(selected_items)
         )
         
         # 转移到图源
         self.menu.add_command(
-            label="📁 转移到图源",
+            label=" 转移到图源",
+            image=self.icons.get('folder'),
+            compound='left',
             command=lambda: self._batch_move_to_source(selected_items)
         )
         
         self.menu.add_separator()
         
+        # 以此为参考排序（仅在单选时显示）
+        if count == 1 and self.sort_by_similarity_callback:
+            reference_path = list(selected_items)[0]
+            self.menu.add_command(
+                label=" 以此为参考排序",
+                image=self.icons.get('search'),
+                compound='left',
+                command=lambda: self.sort_by_similarity_callback(reference_path)
+            )
+            self.menu.add_separator()
+        
         # 删除
         self.menu.add_command(
-            label="🗑️ 删除",
+            label=" 删除",
+            image=self.icons.get('delete'),
+            compound='left',
             command=lambda: self._batch_delete(selected_items)
         )
         

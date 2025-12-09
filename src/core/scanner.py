@@ -5,9 +5,9 @@
 """
 
 import os
-import hashlib
 from pathlib import Path
-from typing import List, Set, Tuple
+from typing import List, Set, Tuple, Dict
+from .image_hash import calculate_image_hashes
 
 
 class ImageScanner:
@@ -41,27 +41,19 @@ class ImageScanner:
         return sorted(images)
     
     @staticmethod
-    def calculate_file_hash(file_path: Path) -> str:
-        """计算文件MD5哈希值"""
-        hash_md5 = hashlib.md5()
-        try:
-            with open(file_path, "rb") as f:
-                for chunk in iter(lambda: f.read(4096), b""):
-                    hash_md5.update(chunk)
-            return hash_md5.hexdigest()
-        except Exception as e:
-            return f"error_{file_path.name}"
-    
-    @staticmethod
-    def find_new_images(folder_path: str, existing_hashes: Set[str]) -> List[Tuple[Path, str]]:
-        """查找新图片（返回图片路径和哈希值的列表）"""
+    def find_new_images(folder_path: str, existing_paths: Set[str]) -> List[Path]:
+        """查找新图片（返回图片路径列表）
+        
+        注意：不再在扫描时计算哈希值，哈希值将在OCR处理时计算
+        """
         all_images = ImageScanner.scan_folder(folder_path)
         new_images = []
         
         for img_path in all_images:
-            img_hash = ImageScanner.calculate_file_hash(img_path)
-            if img_hash not in existing_hashes:
-                new_images.append((img_path, img_hash))
-                existing_hashes.add(img_hash)
+            # 使用os.path.abspath规范化路径，确保与数据库中的格式一致
+            img_path_str = os.path.abspath(str(img_path))
+            if img_path_str not in existing_paths:
+                new_images.append(img_path)
+                existing_paths.add(img_path_str)
         
         return new_images

@@ -9,11 +9,18 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from ...core.database import ImageDatabase
-from .checkbox_dropdown import CheckboxDropdown
+from ...core.database.image_sorter import ImageSorter
+from ...utils.logger import get_logger
 from .detail_panel import DetailPanel
 from .canvas_renderer import CanvasRenderer
 from .event_handlers import EventHandlers
 from .context_menu import ContextMenu
+from .similarity_search import SimilaritySearch
+from .icon_manager import IconManager
+from .pagination_control import PaginationControl
+from .search_toolbar import SearchToolbar
+
+logger = get_logger()
 
 
 class SearchTab:
@@ -29,15 +36,14 @@ class SearchTab:
         self.last_clicked_index = None
         self.favorite_cache = {}
         
-        # 筛选条件
-        self.selected_emotions = []
-        self.selected_sources = []
-        self.selected_tags = []
-        
         # 延迟调度ID
         self._reload_after_id = None
         self._scroll_after_id = None
         self._configure_after_id = None
+        
+        # 加载图标
+        self.icon_manager = IconManager()
+        self.icons = self.icon_manager.icons # 兼容旧代码访问
         
         # 创建主框架
         self.frame = ttk.Frame(parent)
@@ -45,69 +51,43 @@ class SearchTab:
     
     def create_widgets(self):
         """创建界面组件"""
-        # 1. 搜索条件区
-        self._create_search_frame()
+        # 1. 初始化分页控件（但不显示，为了让ResultFrame能访问thumb_size_var）
+        self.pager = PaginationControl(
+            self.frame,
+            load_page_callback=self.load_page,
+            thumb_size_callback=self._on_thumb_change
+        )
+
+        # 2. 搜索工具栏
+        self.toolbar = SearchToolbar(
+            self.frame, 
+            self.db, 
+            self.icon_manager,
+            callbacks={
+                'search': self.search_images,
+                'refresh': self.refresh_page,
+                'image_search': self._on_search_by_image,
+                'tag_manage': self._open_tag_manager,
+                'sort_mode_change': self._on_sort_mode_change
+            }
+        )
         
-        # 2. 结果显示区
+        # 3. 结果显示区
         self._create_result_frame()
         
-        # 3. 分页控件
-        self._create_pager_frame()
+        # 4. 显示分页控件（放在底部）
+        self.pager.pack()
+        
+        # 5. 初始化相似度搜索模块
+        self.similarity_search = SimilaritySearch(
+            parent_frame=self.frame,
+            renderer=self.renderer,
+            sort_info_label=self.toolbar.sort_info_label,
+            db=self.db
+        )
         
         # 初始加载
         self.load_page()
-    
-    def _create_search_frame(self):
-        """创建搜索条件框架"""
-        search_frame = ttk.LabelFrame(self.frame, text="搜索条件", padding=10)
-        search_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # 关键词
-        ttk.Label(search_frame, text="关键词:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        self.search_keyword = tk.StringVar()
-        keyword_entry = ttk.Entry(search_frame, textvariable=self.search_keyword, width=40)
-        keyword_entry.grid(row=0, column=1, columnspan=3, sticky=tk.W, padx=5, pady=5)
-        keyword_entry.bind('<Return>', lambda e: self.search_images())
-        
-        ttk.Button(search_frame, text="🔍 搜索", command=self.search_images).grid(row=0, column=4, padx=5)
-        ttk.Button(search_frame, text="🔄 刷新", command=self.refresh_page).grid(row=0, column=5, padx=5)
-        ttk.Button(search_frame, text="🔖 管理标签", command=self._open_tag_manager).grid(row=0, column=6, padx=5)
-        
-        # 情感筛选
-        ttk.Label(search_frame, text="情绪:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        emotions = [('正向', '正向'), ('负向', '负向'), ('中性', '中性')]
-        self.emotion_dropdown = CheckboxDropdown(
-            search_frame, emotions, default_text="全部情绪",
-            callback=self._on_emotion_filter_change, width=15
-        )
-        self.emotion_dropdown.grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
-        
-        # 图源筛选
-        ttk.Label(search_frame, text="图源:").grid(row=1, column=2, sticky=tk.W, padx=5, pady=5)
-        self.source_dropdown = CheckboxDropdown(
-            search_frame, [], default_text="全部图源",
-            callback=self._on_source_filter_change, width=25
-        )
-        self.source_dropdown.grid(row=1, column=3, sticky=tk.W, padx=5, pady=5)
-        
-        # 标签筛选
-        ttk.Label(search_frame, text="标签:").grid(row=1, column=4, sticky=tk.W, padx=5, pady=5)
-        self.tag_dropdown = CheckboxDropdown(
-            search_frame, [], default_text="全部标签",
-            callback=self._on_tag_filter_change, width=20
-        )
-        self.tag_dropdown.grid(row=1, column=5, sticky=tk.W, padx=5, pady=5)
-        
-        # 收藏筛选
-        self.favorite_filter_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            search_frame, text="❤ 只看收藏",
-            variable=self.favorite_filter_var,
-            command=self._on_favorite_filter_change
-        ).grid(row=1, column=6, sticky=tk.W, padx=5, pady=5)
-        
-        self._load_sources()
-        self._load_tags()
     
     def _create_result_frame(self):
         """创建结果显示框架"""
@@ -144,8 +124,7 @@ class SearchTab:
         self.paned_window.add(detail_frame, weight=1)
         
         # 初始化渲染器
-        self.thumb_size_var = tk.IntVar(value=120)
-        self.renderer = CanvasRenderer(self.canvas, self.thumb_size_var, thumb_padding=20)
+        self.renderer = CanvasRenderer(self.canvas, self.pager.thumb_size_var, thumb_padding=20)
         
         # 初始化详情面板
         self.detail_panel = DetailPanel(
@@ -173,7 +152,9 @@ class SearchTab:
             self.db,
             get_selected_items_func=lambda: self.selected_items,
             get_favorite_cache_func=lambda: self.favorite_cache,
-            refresh_callback=self.refresh_page
+            refresh_callback=self.refresh_page,
+            sort_by_similarity_callback=self._sort_by_similarity_reference,
+            icons=self.icons
         )
         
         # 将上下文菜单附加到事件处理器
@@ -195,118 +176,36 @@ class SearchTab:
         # 让事件处理器能够触发渲染
         self.event_handler._render_visible = self._render_visible_items
     
-    def _create_pager_frame(self):
-        """创建分页控件"""
-        pager_frame = ttk.Frame(self.frame)
-        pager_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        # 每页条数
-        self.page_size_var = tk.IntVar(value=20)
-        ttk.Label(pager_frame, text="每页:").pack(side=tk.LEFT)
-        page_size_cb = ttk.Combobox(
-            pager_frame, textvariable=self.page_size_var,
-            values=[10, 20, 50, 100], width=5, state='readonly'
-        )
-        page_size_cb.pack(side=tk.LEFT, padx=5)
-        page_size_cb.bind('<<ComboboxSelected>>', lambda e: self.load_page())
-        
-        # 缩略图大小
-        ttk.Label(pager_frame, text=" 缩略图:").pack(side=tk.LEFT)
-        thumb_scale = ttk.Scale(
-            pager_frame, from_=60, to=240, orient=tk.HORIZONTAL,
-            command=lambda v: self._on_thumb_change(v)
-        )
-        thumb_scale.set(self.thumb_size_var.get())
-        thumb_scale.pack(side=tk.LEFT, padx=5)
-        ttk.Label(pager_frame, textvariable=self.thumb_size_var).pack(side=tk.LEFT)
-        
-        # 分页按钮
-        self.page_var = tk.IntVar(value=1)
-        self.total_pages = 1
-        
-        ttk.Button(pager_frame, text="上一页", command=self.prev_page).pack(side=tk.LEFT, padx=5)
-        ttk.Button(pager_frame, text="下一页", command=self.next_page).pack(side=tk.LEFT, padx=5)
-        
-        self.page_label = ttk.Label(pager_frame, text="第 1 / 1 页")
-        self.page_label.pack(side=tk.LEFT, padx=10)
-        
-        # 跳转
-        ttk.Label(pager_frame, text=" 跳转到页:").pack(side=tk.LEFT)
-        self.goto_var = tk.IntVar(value=1)
-        self.goto_entry = ttk.Entry(pager_frame, width=6, textvariable=self.goto_var)
-        self.goto_entry.pack(side=tk.LEFT, padx=5)
-        ttk.Button(pager_frame, text="跳转", command=self.goto_page).pack(side=tk.LEFT)
-    
     # ==================== 筛选和加载 ====================
     
-    def _load_sources(self):
-        """加载图源列表"""
-        sources = self.db.get_sources()
-        options = []
-        for source in sources:
-            folder_path = source['folder_path']
-            folder_name = folder_path.split('\\')[-1] or folder_path.split('/')[-1] or folder_path
-            display_text = f"[{source['id']}] {folder_name}"
-            options.append((display_text, source['id']))
-        
-        self.source_dropdown.options = options
-        self.source_dropdown.vars = {}
-        for label, value in options:
-            self.source_dropdown.vars[value] = tk.BooleanVar(value=False)
-        self.source_dropdown._update_button_text()
-    
-    def _load_tags(self):
-        """加载标签列表"""
-        tags = self.db.get_all_tags()
-        options = []
-        for tag in tags:
-            display_text = f"{tag['name']}"
-            options.append((display_text, tag['id']))
-        
-        self.tag_dropdown.options = options
-        self.tag_dropdown.vars = {}
-        for label, value in options:
-            self.tag_dropdown.vars[value] = tk.BooleanVar(value=False)
-        self.tag_dropdown._update_button_text()
-    
-    def _on_emotion_filter_change(self):
-        """情感筛选变化"""
-        self.selected_emotions = self.emotion_dropdown.get_selected_values()
-        self.search_images()
-    
-    def _on_source_filter_change(self):
-        """图源筛选变化"""
-        self.selected_sources = self.source_dropdown.get_selected_values()
-        self.search_images()
-    
-    def _on_tag_filter_change(self):
-        """标签筛选变化"""
-        self.selected_tags = self.tag_dropdown.get_selected_values()
-        self.search_images()
-    
-    def _on_favorite_filter_change(self):
-        """收藏筛选变化"""
-        self.search_images()
-    
     def set_source_filter(self, source_ids):
-        """从外部设置图源筛选"""
-        if not isinstance(source_ids, list):
-            source_ids = [source_ids]
-        
-        self.selected_sources = source_ids
-        self.source_dropdown.set_selected_values(source_ids)
-        self.search_images()
+        """从外部设置图源筛选（适配器方法）"""
+        self.toolbar.filters.set_source_filter(source_ids)
     
     def search_images(self):
         """搜索图片"""
-        self.page_var.set(1)
+        self.pager.set_current_page(1)
         self.load_page()
     
     def refresh_page(self):
         """刷新页面"""
-        self._load_sources()
-        self._load_tags()
+        # 退出相似度搜索模式（如果处于该模式）
+        if hasattr(self, 'similarity_search') and self.similarity_search.is_similarity_mode:
+            self.similarity_search.exit_similarity_mode()
+            logger.info("刷新页面：退出相似度搜索模式，回到正常分页模式")
+        
+        # 使用filters模块重新加载
+        self.toolbar.filters.reload_all()
+        
+        # 清除相似度排序参考
+        self.similarity_reference = None
+        if hasattr(self, 'similarity_search'):
+            self.similarity_search.similarity_reference = None
+        
+        # 根据当前排序模式设置正确的排序说明文本
+        self._update_sort_info_label()
         self.load_page()
+        
         # 刷新详情面板（如果正在显示某张图片）
         self.detail_panel.refresh()
     
@@ -319,14 +218,25 @@ class SearchTab:
                 pass
             self._reload_after_id = None
         
-        page = max(1, int(self.page_var.get()))
-        page_size = int(self.page_size_var.get())
-        keyword = self.search_keyword.get().strip()
+        # 检查是否处于相似度搜索模式
+        is_similarity = hasattr(self, 'similarity_search') and self.similarity_search.is_similarity_mode
         
-        emotions = self.selected_emotions if self.selected_emotions else None
-        source_ids = self.selected_sources if self.selected_sources else None
-        tag_ids = self.selected_tags if self.selected_tags else None
-        is_favorite = True if self.favorite_filter_var.get() else None
+        if not is_similarity:
+            # 清除相似度排序参考（仅在非相似度模式下清除）
+            self.similarity_reference = None
+            # 根据当前排序模式设置正确的排序说明文本
+            self._update_sort_info_label()
+        
+        page = self.pager.get_current_page()
+        page_size = self.pager.get_page_size()
+        keyword = self.toolbar.get_keyword()
+        
+        # 使用筛选器模块获取筛选参数
+        filter_params = self.toolbar.filters.get_filter_params(self.toolbar.favorite_filter_var)
+        emotions = filter_params['emotions']
+        source_ids = filter_params['source_ids']
+        tag_ids = filter_params['tag_ids']
+        is_favorite = filter_params['is_favorite']
         
         # 清空渲染器
         self.renderer.clear_all()
@@ -334,22 +244,50 @@ class SearchTab:
         # 延迟GC
         self.frame.after(100, gc.collect)
         
-        # 计算总页数
-        total = self.db.get_images_count(
-            processed=1, keyword=keyword, emotions=emotions,
-            source_ids=source_ids, tag_ids=tag_ids, is_favorite=is_favorite
-        )
-        self.total_pages = max(1, (total + page_size - 1) // page_size)
-        if page > self.total_pages:
-            page = self.total_pages
-            self.page_var.set(page)
+        if is_similarity:
+            # 相似度搜索模式：带过滤条件的相似度搜索
+            filters = {
+                'keyword': keyword,
+                'emotions': emotions,
+                'source_ids': source_ids,
+                'tag_ids': tag_ids,
+                'is_favorite': is_favorite
+            }
+            # 执行带过滤的相似度搜索
+            self.all_results = self.similarity_search.search_with_filters(filters)
+            
+            # 在相似度模式下，我们不使用标准分页，而是显示所有结果
+            # 更新分页控件显示为第1页/共1页
+            self.pager.update_display(1, 1)
+            
+        else:
+            # 正常模式：分页查询
+            # 计算总页数
+            total = self.db.get_images_count(
+                processed=1, keyword=keyword, emotions=emotions,
+                source_ids=source_ids, tag_ids=tag_ids, is_favorite=is_favorite
+            )
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            
+            if page > total_pages:
+                page = total_pages
+                self.pager.set_current_page(page)
+            
+            # 更新分页控件
+            self.pager.update_display(total_pages, page)
+            
+            # 获取数据
+            self.all_results = self.db.get_images_page(
+                page=page, page_size=page_size, processed=1,
+                keyword=keyword, emotions=emotions, source_ids=source_ids,
+                tag_ids=tag_ids, is_favorite=is_favorite
+            )
+            
+            # 应用排序（仅在非相似度模式下应用常规排序）
+            self._apply_sort()
         
-        # 获取数据
-        self.all_results = self.db.get_images_page(
-            page=page, page_size=page_size, processed=1,
-            keyword=keyword, emotions=emotions, source_ids=source_ids,
-            tag_ids=tag_ids, is_favorite=is_favorite
-        )
+        # 保存原始结果
+        self.original_results = self.all_results.copy()
         
         # 重新加载favorite_cache，确保收藏状态是最新的
         self.favorite_cache = {}
@@ -370,7 +308,6 @@ class SearchTab:
             total_rows = (len(self.all_results) + self.renderer.cols - 1) // self.renderer.cols
             self.renderer.set_scrollregion(total_rows)
         
-        self.update_pager()
         self._render_visible_items()
         self.canvas.update_idletasks()
     
@@ -380,41 +317,11 @@ class SearchTab:
             self.all_results, self.selected_items, self.favorite_cache
         )
     
-    # ==================== 分页控制 ====================
-    
-    def prev_page(self):
-        """上一页"""
-        p = max(1, self.page_var.get() - 1)
-        if p != self.page_var.get():
-            self.page_var.set(p)
-            self.load_page()
-    
-    def next_page(self):
-        """下一页"""
-        p = min(self.total_pages, self.page_var.get() + 1)
-        if p != self.page_var.get():
-            self.page_var.set(p)
-            self.load_page()
-    
-    def goto_page(self):
-        """跳转到指定页"""
-        try:
-            p = int(self.goto_var.get())
-        except:
-            p = 1
-        p = max(1, min(self.total_pages, p))
-        self.page_var.set(p)
-        self.load_page()
-    
-    def update_pager(self):
-        """更新分页显示"""
-        self.page_label.config(text=f"第 {self.page_var.get()} / {self.total_pages} 页")
-    
     def _on_thumb_change(self, value):
         """缩略图大小改变"""
         try:
             v = int(float(value))
-            self.thumb_size_var.set(v)
+            self.pager.set_thumb_size(v)
         except:
             pass
         self._schedule_reload(250)
@@ -543,4 +450,68 @@ class SearchTab:
             self.parent.winfo_toplevel(),
             self.db,
             callback=None
+        )
+    
+    # ==================== 排序相关 ====================
+    
+    def _on_sort_mode_change(self):
+        """排序模式变化"""
+        # 更新排序说明文本
+        self._update_sort_info_label()
+        
+        # 应用排序
+        self._apply_sort()
+    
+    def _update_sort_info_label(self):
+        """根据当前排序模式更新排序说明文本"""
+        mode = self.toolbar.sort_mode_var.get()
+        
+        if mode == "time":
+            self.toolbar.update_sort_info("(右键图片可选择'以此为参考排序')", "gray")
+        elif mode == "color":
+            self.toolbar.update_sort_info("(将颜色相近的图片聚集在一起)", "blue")
+    
+    def _apply_sort(self):
+        """应用当前排序模式"""
+        if not self.all_results:
+            return
+        
+        mode = self.toolbar.sort_mode_var.get()
+        
+        if mode == "color":
+            # 按颜色聚类排序
+            self.all_results = ImageSorter.sort_by_color(self.all_results)
+        elif mode == "time":
+            # 恢复原始的时间排序（从数据库获取的顺序）
+            if hasattr(self, 'original_results') and self.original_results:
+                self.all_results = self.original_results.copy()
+        # similarity模式通过右键菜单触发
+        
+        # 重新渲染
+        self.renderer.clear_all()
+        self._render_visible_items()
+    
+    def _sort_by_similarity_reference(self, reference_path: str):
+        """以指定图片为参考进行相似度排序（适配器方法）"""
+        sorted_results = self.similarity_search.sort_by_similarity(
+            self.all_results,
+            reference_path
+        )
+        if sorted_results:
+            self.all_results = sorted_results
+            self.renderer.clear_all()
+            self._render_visible_items()
+    
+    # ==================== 适配器方法（保持向后兼容）====================
+    
+    def _on_search_by_image(self):
+        """以图搜图（适配器方法）"""
+        def render_callback():
+            self.renderer.clear_all()
+            self._render_visible_items()
+            
+        self.similarity_search.search_by_image(
+            all_results_getter=lambda: self.all_results,
+            all_results_setter=lambda r: setattr(self, 'all_results', r),
+            render_callback=render_callback
         )

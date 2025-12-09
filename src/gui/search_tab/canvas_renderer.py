@@ -38,14 +38,23 @@ class CanvasRenderer:
         # 字体对象
         self.text_font = tkfont.Font(family="TkDefaultFont", size=9)
         self.emotion_font = tkfont.Font(family="TkDefaultFont", size=8)
+        
+        # 缩略图缓存限制（最多保留50张缩略图以节省内存）
+        self.max_cache_size = 50
+        self.cache_access_order = []  # 用于LRU淘汰
     
     def clear_all(self):
         """清空所有Canvas内容"""
         self.canvas.delete('all')
         self.canvas_items.clear()
+        # 清理图像引用时触发垃圾回收
         self.image_refs.clear()
         self.item_paths.clear()
         self.event_rects.clear()
+        self.cache_access_order.clear()
+        # 强制垃圾回收释放PIL图像
+        import gc
+        gc.collect()
     
     def calculate_layout(self, canvas_width):
         """计算布局参数"""
@@ -109,7 +118,7 @@ class CanvasRenderer:
             if first_row <= r <= last_row:
                 items_to_render.add(idx)
         
-        # 删除不可见的Canvas Items
+        # 删除不可见的Canvas Items（内存优化）
         to_remove = []
         for key in list(self.canvas_items.keys()):
             try:
@@ -125,9 +134,25 @@ class CanvasRenderer:
                     self.canvas.delete(item_id)
                 del self.canvas_items[key]
             
-            self.image_refs.pop(key, None)
+            # 显式删除图像引用以释放内存
+            if key in self.image_refs:
+                del self.image_refs[key]
             self.item_paths.pop(key, None)
             self.event_rects.pop(key, None)
+            # 从缓存访问顺序中移除
+            if key in self.cache_access_order:
+                self.cache_access_order.remove(key)
+        
+        # 限制缩略图缓存大小（LRU淘汰策略）
+        if len(self.image_refs) > self.max_cache_size:
+            # 保留最近访问的缩略图，删除旧的
+            while len(self.image_refs) > self.max_cache_size:
+                if self.cache_access_order:
+                    oldest_key = self.cache_access_order.pop(0)
+                    if oldest_key in self.image_refs and oldest_key not in items_to_render:
+                        del self.image_refs[oldest_key]
+                else:
+                    break
         
         # 渲染新项目
         MAX_THUMB_SIZE = 150
@@ -169,6 +194,10 @@ class CanvasRenderer:
                 )
                 items.append(img_id)
                 self.image_refs[key] = imgtk
+                # 更新缓存访问顺序
+                if key in self.cache_access_order:
+                    self.cache_access_order.remove(key)
+                self.cache_access_order.append(key)
             else:
                 text_id = self.canvas.create_text(
                     center_x, image_y + thumb_side // 2,
@@ -255,7 +284,12 @@ class CanvasRenderer:
             )
     
     def _load_thumbnail(self, file_path, thumb_side):
-        """加载缩略图"""
+        """加载缩略图（优化内存管理）"""
+        img = None
+        background = None
+        compressed_img = None
+        buffer = None
+        
         try:
             if not file_path or not os.path.exists(file_path):
                 return None
@@ -270,23 +304,59 @@ class CanvasRenderer:
                 background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
                 img.close()
                 img = background
+                background = None  # 已经赋值给img了
             elif img.mode != 'RGB':
                 img = img.convert('RGB')
             
+            # 压缩为JPEG以减少内存占用
             buffer = io.BytesIO()
             img.save(buffer, format='JPEG', quality=70, optimize=True)
             buffer.seek(0)
+            
+            # 显式关闭原始图像
             img.close()
             del img
+            img = None
             
+            # 从压缩buffer加载
             compressed_img = Image.open(buffer)
             imgtk = ImageTk.PhotoImage(compressed_img)
+            
+            # 关闭所有临时对象
             compressed_img.close()
+            del compressed_img
+            compressed_img = None
+            
             buffer.close()
+            del buffer
+            buffer = None
             
             return imgtk
+            
         except Exception as e:
             return None
+        finally:
+            # 确保所有对象都被释放
+            if img is not None:
+                try:
+                    img.close()
+                except:
+                    pass
+            if background is not None:
+                try:
+                    background.close()
+                except:
+                    pass
+            if compressed_img is not None:
+                try:
+                    compressed_img.close()
+                except:
+                    pass
+            if buffer is not None:
+                try:
+                    buffer.close()
+                except:
+                    pass
     
     def _truncate_text(self, text, max_width, max_lines=2):
         """截断文本确保不超过指定行数和宽度"""

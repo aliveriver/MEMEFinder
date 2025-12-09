@@ -26,36 +26,40 @@ class ImageManager:
         """
         self.get_cursor = get_cursor_func
     
-    def get_image_hashes(self, source_id: int = None) -> Set[str]:
-        """获取已存在的图片哈希值"""
+    def get_image_paths(self, source_id: int = None) -> Set[str]:
+        """获取已存在的图片路径"""
         with self.get_cursor() as cursor:
             if source_id:
-                cursor.execute("SELECT file_hash FROM images WHERE source_id = ?", (source_id,))
+                cursor.execute("SELECT file_path FROM images WHERE source_id = ?", (source_id,))
             else:
-                cursor.execute("SELECT file_hash FROM images")
-            hashes = {row[0] for row in cursor.fetchall()}
-        logger.debug(f"获取到 {len(hashes)} 个图片哈希值")
-        return hashes
+                cursor.execute("SELECT file_path FROM images")
+            paths = {row[0] for row in cursor.fetchall()}
+        logger.debug(f"获取到 {len(paths)} 个图片路径")
+        return paths
     
-    def add_image(self, file_path: str, file_hash: str, source_id: int) -> bool:
-        """添加新图片"""
+    def add_image(self, file_path: str, source_id: int, phash: str = None, hsv_h: int = None) -> bool:
+        """添加新图片（哈希值可选，将在OCR处理时更新）"""
+        import os
+        # 规范化路径格式，确保数据库中路径一致性
+        file_path = os.path.abspath(file_path)
+        
         try:
             with self.get_cursor(commit=True) as cursor:
                 cursor.execute("""
-                    INSERT INTO images (file_path, file_hash, source_id, added_time)
-                    VALUES (?, ?, ?, ?)
-                """, (file_path, file_hash, source_id, datetime.now().isoformat()))
+                    INSERT INTO images (file_path, source_id, phash, hsv_h, added_time)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (file_path, source_id, phash, hsv_h, datetime.now().isoformat()))
             logger.debug(f"添加图片: {Path(file_path).name}")
             return True
         except sqlite3.IntegrityError:
             logger.debug(f"图片已存在: {Path(file_path).name}")
             return False
     
-    def add_images_batch(self, images: List[Tuple[str, str, int]]) -> int:
-        """批量添加图片
+    def add_images_batch(self, images: List[Tuple[str, int]]) -> int:
+        """批量添加图片（不包含哈希值,将在OCR处理时更新）
         
         Args:
-            images: [(file_path, file_hash, source_id), ...]
+            images: [(file_path, source_id), ...]
             
         Returns:
             成功添加的数量
@@ -63,23 +67,44 @@ class ImageManager:
         if not images:
             return 0
         
-        added_count = 0
         current_time = datetime.now().isoformat()
         
         try:
-            with self.get_cursor(commit=True) as cursor:
-                # 使用executemany进行批量插入
-                data = [(fp, fh, sid, current_time) for fp, fh, sid in images]
-                cursor.executemany("""
-                    INSERT OR IGNORE INTO images (file_path, file_hash, source_id, added_time)
-                    VALUES (?, ?, ?, ?)
-                """, data)
-                added_count = cursor.rowcount
+            import os
+            # 规范化所有路径，确保格式一致
+            normalized_images = [(os.path.abspath(fp), sid) for fp, sid in images]
             
-            logger.info(f"批量添加图片: {added_count}/{len(images)} 张")
+            with self.get_cursor(commit=True) as cursor:
+                # 先查询哪些路径已存在
+                existing_paths = set()
+                for fp, sid in normalized_images:
+                    cursor.execute("SELECT file_path FROM images WHERE file_path = ?", (fp,))
+                    if cursor.fetchone():
+                        existing_paths.add(fp)
+                
+                logger.debug(f"准备插入 {len(normalized_images)} 条记录，其中 {len(existing_paths)} 条已存在")
+                
+                # 准备批量插入数据（使用规范化后的路径）
+                data = [(fp, sid, current_time) for fp, sid in normalized_images]
+                
+                # 使用executemany进行批量插入（已存在的会被IGNORE）
+                cursor.executemany("""
+                    INSERT OR IGNORE INTO images (file_path, source_id, added_time)
+                    VALUES (?, ?, ?)
+                """, data)
+                
+                # 计算实际新增的数量
+                added_count = len(normalized_images) - len(existing_paths)
+            
+            if added_count > 0:
+                logger.info(f"批量添加图片: {added_count}/{len(normalized_images)} 张")
+            else:
+                logger.debug(f"批量添加图片: {added_count}/{len(normalized_images)} 张 (全部已存在)")
             return added_count
         except Exception as e:
             logger.error(f"批量添加图片失败: {e}")
+            import traceback
+            traceback.print_exc()
             return 0
     
     def get_unprocessed_images(self, limit: int = 100) -> List[Dict]:
@@ -102,22 +127,37 @@ class ImageManager:
         return images
     
     def update_image_data(self, image_id: int, ocr_text: str, filtered_text: str, 
-                         emotion: str, pos_score: float, neg_score: float):
-        """更新图片处理结果"""
+                         emotion: str, pos_score: float, neg_score: float,
+                         phash: str = None, hsv_h: int = None,
+                         hsv_s: int = None, hsv_v: int = None,
+                         hue_idx: int = None, lightness: int = None, 
+                         dl_features: bytes = None):
+        """更新图片处理结果（包括哈希值、HSV数据、K-Means颜色特征和深度学习特征）
+        
+        Args:
+            hue_idx: 色相索引 (0=灰色, 1-12=颜色分段)
+            lightness: 明度 (0-100)
+            dl_features: 深度学习特征向量 (1000维, float32 序列化)
+        """
         with self.get_cursor(commit=True) as cursor:
             cursor.execute("""
                 UPDATE images 
                 SET ocr_text = ?, filtered_text = ?, emotion = ?,
-                    emotion_positive = ?, emotion_negative = ?, processed = 1
+                    emotion_positive = ?, emotion_negative = ?, processed = 1,
+                    phash = ?, hsv_h = ?, hsv_s = ?, hsv_v = ?,
+                    color_hue_idx = ?, color_lightness = ?,
+                    dl_features = ?
                 WHERE id = ?
-            """, (ocr_text, filtered_text, emotion, pos_score, neg_score, image_id))
-        logger.debug(f"更新图片数据: ID={image_id}, 情绪={emotion}")
+            """, (ocr_text, filtered_text, emotion, pos_score, neg_score, 
+                  phash, hsv_h, hsv_s, hsv_v, hue_idx, lightness, 
+                  dl_features, image_id))
+        logger.debug(f"更新图片数据: ID={image_id}, 情绪={emotion}, 色相索引={hue_idx}, DL特征={'有' if dl_features else '无'}")
     
-    def update_images_batch(self, updates: List[Tuple[int, str, str, str, float, float]]) -> int:
+    def update_images_batch(self, updates: List[Tuple]) -> int:
         """批量更新图片数据
         
         Args:
-            updates: [(image_id, ocr_text, filtered_text, emotion, pos_score, neg_score), ...]
+            updates: [(image_id, ocr_text, filtered_text, emotion, pos_score, neg_score, phash, hsv_h), ...]
             
         Returns:
             更新的数量
@@ -128,12 +168,13 @@ class ImageManager:
         try:
             with self.get_cursor(commit=True) as cursor:
                 # 准备批量更新数据
-                data = [(ocr, filt, emo, pos, neg, 1, img_id) 
-                       for img_id, ocr, filt, emo, pos, neg in updates]
+                data = [(ocr, filt, emo, pos, neg, 1, phash, hsv_h, img_id) 
+                       for img_id, ocr, filt, emo, pos, neg, phash, hsv_h in updates]
                 cursor.executemany("""
                     UPDATE images 
                     SET ocr_text = ?, filtered_text = ?, emotion = ?,
-                        emotion_positive = ?, emotion_negative = ?, processed = ?
+                        emotion_positive = ?, emotion_negative = ?, processed = ?,
+                        phash = ?, hsv_h = ?
                     WHERE id = ?
                 """, data)
                 updated_count = cursor.rowcount
@@ -157,7 +198,8 @@ class ImageManager:
             cursor.execute("""
                 SELECT id, file_path, file_hash, source_id, ocr_text, 
                        filtered_text, emotion, emotion_positive, emotion_negative, 
-                       added_time, processed, is_favorite, emotion_manual
+                       added_time, processed, is_favorite, emotion_manual,
+                       color_hue_idx, color_lightness, phash, hsv_h, hsv_s, hsv_v
                 FROM images
                 WHERE file_path = ?
             """, (file_path,))
@@ -180,7 +222,13 @@ class ImageManager:
                 'added_time': row[9],
                 'processed': bool(row[10]),
                 'is_favorite': bool(row[11]),
-                'emotion_manual': bool(row[12])
+                'emotion_manual': bool(row[12]),
+                'color_hue_idx': row[13] if len(row) > 13 else None,
+                'color_lightness': row[14] if len(row) > 14 else None,
+                'phash': row[15] if len(row) > 15 else None,
+                'hsv_h': row[16] if len(row) > 16 else None,
+                'hsv_s': row[17] if len(row) > 17 else None,
+                'hsv_v': row[18] if len(row) > 18 else None
             }
         
         logger.debug(f"获取图片详情: {file_path}")

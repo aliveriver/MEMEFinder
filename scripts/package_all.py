@@ -65,9 +65,10 @@ def generate_spec(version_name, console=False):
     hidden_imports = [
         'unittest', 'unittest.mock', 'doctest',
         'rapidocr_onnxruntime', 'onnxruntime',
-        'snownlp', 'cv2', 'PIL', 'numpy', 'pandas', 
+        'snownlp', 'cv2', 'PIL', 'numpy', 
         'tkinter', 'sqlite3', 'flask', 'flask_cors',
-        'pypdfium2', 'pyclipper', 'shapely', 'imgaug'
+        'pypdfium2', 'pyclipper', 'shapely', 'imgaug',
+        # 不包含sklearn（太大），颜色聚类已用纯numpy实现
     ]
     
     # 基础数据文件
@@ -76,7 +77,8 @@ def generate_spec(version_name, console=False):
         ('assets', 'assets'),  # 打包 assets 目录（包含 icon.ico）
         ('README.md', '.'),
         ('LICENSE', '.'),
-        # 模型将由用户按需下载，不打包到发布版本中
+        # 打包模型文件
+        ('models/mobilenetv3_small_feature.onnx', 'models'),  # 深度学习特征提取模型（4.73MB）
     ]
     
     # 补丁文件检测
@@ -210,6 +212,24 @@ a = Analysis(
         # 数据处理库（项目未使用）
         'pyarrow',  # Arrow/Parquet支持 - 约79MB
         'pandas',  # 数据分析框架 - 约17MB
+        'sklearn', 'scikit-learn',  # 机器学习库 - 约30MB，已用纯numpy实现
+        'skimage', 'scikit-image',  # 图像处理库 - 约20MB，已用OpenCV替代
+        # 深度学习框架（项目不使用）
+        'paddle', 'paddlepaddle', 'paddlex',  # PaddlePaddle框架 - 约783MB！
+        'torch', 'pytorch', 'torchvision', 'torchaudio',  # PyTorch框架 - 约310MB
+        'tensorflow', 'tf',  # TensorFlow框架
+        'jax', 'flax',  # JAX框架
+        # Hugging Face 生态（项目不使用）
+        'transformers',  # Transformers库 - 约50MB
+        'datasets',  # Datasets库
+        'tokenizers',  # 分词器
+        # 其他不必要的库
+        'dask',  # 并行计算库
+        'xarray',  # 多维数组库
+        'zarr',  # 数组存储格式
+        'h5py',  # HDF5文件支持
+        'tables',  # PyTables（HDF5支持）
+        'fastparquet',  # Parquet文件支持
         # 注意：不能排除snownlp本身，但可以通过hooks排除其数据文件
     ],
     win_no_prefer_redirects=False,
