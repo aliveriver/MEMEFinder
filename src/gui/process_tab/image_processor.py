@@ -132,7 +132,7 @@ class ImageProcessor:
     
     def _schedule_model_unload(self):
         """
-        调度模型卸载：5秒后自动释放OCR和SnowNLP模型
+        调度模型卸载：2秒后自动释放OCR和SnowNLP模型
         节省约400MB内存（OCR ~370MB + SnowNLP ~30MB），下次使用时会自动重新加载
         """
         # 取消之前的定时器
@@ -145,8 +145,8 @@ class ImageProcessor:
         def unload_models():
             try:
                 if self.ocr_processor and not self.processing:
-                    self.log_message("[INFO] 5秒无活动，自动释放OCR模型以节省内存...")
-                    logger.info("Auto-unloading OCR models after 5 seconds of inactivity")
+                    self.log_message("[INFO] 2秒无活动，自动释放OCR模型以节省内存...")
+                    logger.info("Auto-unloading OCR models after 2 seconds of inactivity")
                     
                     # 1. 释放ONNX Runtime会话
                     if self.ocr_processor.ocr:
@@ -217,11 +217,11 @@ class ImageProcessor:
                 import traceback
                 logger.debug(traceback.format_exc())
         
-        # 5秒后执行卸载
-        self._unload_timer = threading.Timer(5.0, unload_models)
+        # 2秒后执行卸载
+        self._unload_timer = threading.Timer(2.0, unload_models)
         self._unload_timer.daemon = True
         self._unload_timer.start()
-        logger.info("Model auto-unload timer scheduled for 5 seconds")
+        logger.info("Model auto-unload timer scheduled for 2 seconds")
     
     def process_single_image(self, img_info):
         """处理单张图片"""
