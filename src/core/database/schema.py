@@ -44,7 +44,7 @@ class DatabaseSchema:
                 hsv_v INTEGER,
                 color_hue_idx TINYINT,
                 color_lightness TINYINT,
-                color_histogram BLOB,
+                dl_features BLOB,
                 source_id INTEGER,
                 ocr_text TEXT,
                 filtered_text TEXT,
@@ -110,6 +110,9 @@ class DatabaseSchema:
         """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_emotion ON images(emotion)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dl_features ON images(id) WHERE dl_features IS NOT NULL
         """)
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_processed ON images(processed)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-图片哈希和颜色特征计算模块 - PHash、RGB直方图主色调
+图片哈希和颜色特征计算模块 - PHash、RGB直方图主色调、深度学习特征
 """
 
 import cv2
@@ -100,16 +100,15 @@ class ImageHashCalculator:
         
         策略：
         1. 主色调：排除低饱和度颜色（背景），从彩色像素中取众数
-        2. 直方图：16x16x16的RGB直方图(4096 bins)，归一化后序列化
+        2. 转换到LCh色彩空间进行分类
         
         Args:
             image_path: 图片路径
             
         Returns:
-            (hue_idx, lightness, histogram_bytes) 三元组：
+            (hue_idx, lightness) 二元组：
             - hue_idx: 色相索引 (0=灰色, 1-12=色系)
             - lightness: 亮度值 (0-100)
-            - histogram_bytes: 归一化RGB直方图的二进制数据
         """
         try:
             # 读取图片
@@ -191,71 +190,26 @@ class ImageHashCalculator:
             
             lightness = int(round(L))
             
-            # ========== 5. 生成完整RGB直方图（用于相似度） ==========
-            hist_full = cv2.calcHist(
-                [img_rgb],
-                channels=[0, 1, 2],
-                mask=None,
-                histSize=[16, 16, 16],
-                ranges=[0, 256, 0, 256, 0, 256]
-            )
-            
-            hist_full = hist_full.flatten()
-            hist_full = hist_full / (hist_full.sum() + 1e-7)
-            histogram_bytes = hist_full.astype(np.float32).tobytes()
-            
-            return (hue_idx, lightness, histogram_bytes)
+            return (hue_idx, lightness)
             
         except Exception as e:
             print(f"计算颜色特征失败 {image_path}: {e}")
             import traceback
             traceback.print_exc()
-            return (0, 0, b'')
+            return (0, 0)
     
-    @staticmethod
-    def calculate_histogram_similarity(hist1_bytes: bytes, hist2_bytes: bytes) -> float:
-        """
-        计算两个直方图的相似度（余弦相似度）
-        
-        Args:
-            hist1_bytes: 第一个直方图的字节数据
-            hist2_bytes: 第二个直方图的字节数据
-            
-        Returns:
-            相似度分数 (0-1)，1表示完全相同
-        """
-        if not hist1_bytes or not hist2_bytes:
-            return 0.0
-        
-        try:
-            # 反序列化
-            hist1 = np.frombuffer(hist1_bytes, dtype=np.float32)
-            hist2 = np.frombuffer(hist2_bytes, dtype=np.float32)
-            
-            # 余弦相似度
-            dot_product = np.dot(hist1, hist2)
-            norm1 = np.linalg.norm(hist1)
-            norm2 = np.linalg.norm(hist2)
-            
-            if norm1 == 0 or norm2 == 0:
-                return 0.0
-            
-            similarity = dot_product / (norm1 * norm2)
-            return float(max(0.0, min(1.0, similarity)))
-            
-        except Exception as e:
-            print(f"计算直方图相似度失败: {e}")
-            return 0.0
+    # 已删除: calculate_histogram_similarity
+    # 原因: 改用深度学习特征后不再需要RGB直方图相似度计算
     
     @staticmethod
     def calculate_hsv_dominant(image_path: Path, bins: int = 180) -> Tuple[int, int, int]:
         """
         【已废弃】计算HSV主色调（保留用于向后兼容）
         
-        新代码应使用 calculate_dominant_color_kmeans()（实际已改为直方图众数法）
+        新代码应使用 calculate_dominant_color_kmeans()
         """
         # 调用新方法并转换格式
-        hue_idx, lightness, _ = ImageHashCalculator.calculate_dominant_color_kmeans(image_path)
+        hue_idx, lightness = ImageHashCalculator.calculate_dominant_color_kmeans(image_path)
         
         # 简单映射：将LCh转换回近似的HSV
         # 这只是为了兼容性，实际应该使用新的存储字段
@@ -266,30 +220,30 @@ class ImageHashCalculator:
         return (h, s, v)
     
     @staticmethod
-    def calculate_both(image_path: Path) -> Tuple[str, int, int, int, int, bytes]:
+    def calculate_both(image_path: Path) -> Tuple[str, int, int, int, int, int]:
         """
-        同时计算PHash和颜色特征（直方图众数主色调 + RGB直方图）
+        同时计算PHash和颜色特征
         
         Args:
             image_path: 图片路径
             
         Returns:
-            (phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v, histogram_bytes)
+            (phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v)
             - phash: 感知哈希字符串
             - hue_idx: 色相索引 (0-12)
             - lightness: 亮度 (0-100)
-            - histogram_bytes: RGB直方图字节数据
+            - hsv_h, hsv_s, hsv_v: 为向后兼容保留
         """
         phash = ImageHashCalculator.calculate_phash(image_path)
-        hue_idx, lightness, histogram_bytes = ImageHashCalculator.calculate_dominant_color_kmeans(image_path)
+        hue_idx, lightness = ImageHashCalculator.calculate_dominant_color_kmeans(image_path)
         
         # 为了向后兼容，也计算HSV（但不推荐使用）
         hsv_h, hsv_s, hsv_v = ImageHashCalculator.calculate_hsv_dominant(image_path)
         
-        return phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v, histogram_bytes
+        return phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v
 
 
-def calculate_image_hashes(image_path: Path) -> Tuple[str, int, int, int, int, int, bytes]:
+def calculate_image_hashes(image_path: Path) -> Tuple[str, int, int, int, int, int]:
     """
     便捷函数：计算图片的完整特征
     
@@ -297,6 +251,47 @@ def calculate_image_hashes(image_path: Path) -> Tuple[str, int, int, int, int, i
         image_path: 图片路径
         
     Returns:
-        (phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v, histogram_bytes)
+        (phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v)
     """
     return ImageHashCalculator.calculate_both(image_path)
+
+
+def calculate_dl_features(image_path: Path) -> Optional[bytes]:
+    """
+    计算深度学习特征（MobileNetV3）
+    
+    Args:
+        image_path: 图片路径
+        
+    Returns:
+        特征向量bytes，失败返回None
+    """
+    try:
+        from .dl_feature_extractor import get_feature_extractor
+        from .dl_model_manager import DLModelManager
+        
+        # 获取模型路径
+        models_dir = Path(__file__).parent.parent.parent / "models"
+        manager = DLModelManager(models_dir)
+        model_path = manager.get_model_path()
+        
+        if not model_path:
+            # 模型不可用，返回None
+            return None
+        
+        # 获取特征提取器
+        extractor = get_feature_extractor(model_path)
+        if not extractor or not extractor.session:
+            return None
+        
+        # 提取特征
+        features = extractor.extract_features(image_path)
+        if features is None:
+            return None
+        
+        # 转换为bytes
+        return extractor.features_to_bytes(features)
+        
+    except Exception as e:
+        # 如果DL模块不可用或出错，静默失败
+        return None

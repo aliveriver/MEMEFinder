@@ -112,12 +112,13 @@ class ImageDatabase:
                          phash: str = None, hsv_h: int = None,
                          hsv_s: int = None, hsv_v: int = None,
                          hue_idx: int = None, lightness: int = None, 
-                         histogram: bytes = None):
-        """更新图片处理结果（包括哈希值、HSV数据和K-Means颜色特征）"""
+                         dl_features: bytes = None):
+        """更新图片处理结果（包括哈希值、HSV数据、K-Means颜色特征和深度学习特征）"""
         self._image_manager.update_image_data(image_id, ocr_text, filtered_text, 
                                              emotion, pos_score, neg_score, 
                                              phash, hsv_h, hsv_s, hsv_v,
-                                             hue_idx, lightness, histogram)
+                                             hue_idx, lightness,
+                                             dl_features)
     
     def update_images_batch(self, updates):
         """批量更新图片数据"""

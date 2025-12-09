@@ -1,6 +1,9 @@
 # RapidOCR - 轻量级OCR引擎
 rapidocr-onnxruntime>=1.3.0
 
+# ONNX Runtime - 深度学习推理引擎
+onnxruntime>=1.16.0  # CPU版本，支持ONNX模型推理
+
 # 图像处理
 opencv-python>=4.8.0
 pillow>=10.0.0

@@ -238,14 +238,24 @@ class OCRProcessor:
             # 5. 计算图片哈希值和颜色特征（PHash + HSV + K-Means颜色）
             try:
                 from ..image_hash import calculate_image_hashes
-                phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v, histogram_bytes = calculate_image_hashes(image_path)
+                phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v = calculate_image_hashes(image_path)
                 logger.debug(f"图片特征计算完成: PHash={phash[:8]}..., HSV=({hsv_h},{hsv_s},{hsv_v}), 色相索引={hue_idx}, 明度={lightness}")
             except Exception as e:
                 logger.warning(f"计算图片特征失败: {e}")
                 phash = '0' * 16
                 hsv_h, hsv_s, hsv_v = -1, 0, 0
                 hue_idx, lightness = -1, 0
-                histogram_bytes = None
+            
+            # 6. 计算深度学习特征（可选，不影响主流程）
+            dl_features = None
+            try:
+                from ..image_hash import calculate_dl_features
+                dl_features = calculate_dl_features(image_path)
+                if dl_features:
+                    logger.debug("✓ 深度学习特征计算完成")
+            except Exception as e:
+                # 静默失败，DL特征是可选的
+                pass
             
             return {
                 'ocr_text': ocr_text,
@@ -259,7 +269,7 @@ class OCRProcessor:
                 'hsv_v': hsv_v,
                 'hue_idx': hue_idx,
                 'lightness': lightness,
-                'histogram': histogram_bytes
+                'dl_features': dl_features
             }
         except Exception as e:
             logger.error(f"处理图片失败 {image_path}: {e}")
@@ -279,7 +289,7 @@ class OCRProcessor:
             'hsv_v': 0,
             'hue_idx': -1,
             'lightness': 0,
-            'histogram': None
+            'dl_features': None
         }
     
     # 保留向后兼容的属性访问

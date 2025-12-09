@@ -398,6 +398,62 @@ class DetailPanel:
             score_label.grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
             self._bind_mousewheel_to_widget(score_label)
         
+        # 主题色显示
+        color_hue_idx = detail.get('color_hue_idx')
+        color_lightness = detail.get('color_lightness')
+        hsv_h = detail.get('hsv_h')
+        hsv_s = detail.get('hsv_s')
+        hsv_v = detail.get('hsv_v')
+        
+        if color_hue_idx is not None and color_lightness is not None:
+            color_frame = ttk.Frame(self.detail_content_frame)
+            color_frame.pack(fill=tk.X, pady=5, padx=padding)
+            self._bind_mousewheel_to_widget(color_frame)
+            
+            color_title = ttk.Label(color_frame, text="主题色:", font=('TkDefaultFont', 9, 'bold'))
+            color_title.pack(anchor='w')
+            self._bind_mousewheel_to_widget(color_title)
+            
+            # 显示色块和信息
+            color_display_frame = ttk.Frame(color_frame)
+            color_display_frame.pack(fill=tk.X, pady=5)
+            self._bind_mousewheel_to_widget(color_display_frame)
+            
+            # 从HSV转换为RGB显示色块
+            if hsv_h is not None and hsv_h >= 0:
+                import colorsys
+                rgb = colorsys.hsv_to_rgb(hsv_h/179, hsv_s/255, hsv_v/255)
+                rgb_hex = '#{:02x}{:02x}{:02x}'.format(int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255))
+                
+                color_block = tk.Frame(color_display_frame, width=40, height=40, bg=rgb_hex, relief=tk.SOLID, borderwidth=1)
+                color_block.pack(side=tk.LEFT, padx=(0, 10))
+                color_block.pack_propagate(False)
+                self._bind_mousewheel_to_widget(color_block)
+                
+                # 颜色信息
+                color_info_frame = ttk.Frame(color_display_frame)
+                color_info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+                self._bind_mousewheel_to_widget(color_info_frame)
+                
+                # 色相分类
+                color_names = [
+                    "灰色", "红色", "橙黄", "黄绿", "绿色", "青色", "蓝色",
+                    "深蓝", "紫色", "品红", "洋红", "玫红", "红色"
+                ]
+                color_name = color_names[color_hue_idx] if 0 <= color_hue_idx < len(color_names) else "未知"
+                
+                name_label = ttk.Label(color_info_frame, text=f"色系: {color_name}", font=('TkDefaultFont', 9))
+                name_label.pack(anchor='w')
+                self._bind_mousewheel_to_widget(name_label)
+                
+                lightness_label = ttk.Label(color_info_frame, text=f"明度: {color_lightness}/100", font=('TkDefaultFont', 9))
+                lightness_label.pack(anchor='w')
+                self._bind_mousewheel_to_widget(lightness_label)
+                
+                hsv_label = ttk.Label(color_info_frame, text=f"HSV: ({hsv_h}, {hsv_s}, {hsv_v})", font=('TkDefaultFont', 8), foreground='gray')
+                hsv_label.pack(anchor='w')
+                self._bind_mousewheel_to_widget(hsv_label)
+        
         # 自定义标签区域
         sep4 = ttk.Separator(self.detail_content_frame, orient=tk.HORIZONTAL)
         sep4.pack(fill=tk.X, pady=10, padx=10)

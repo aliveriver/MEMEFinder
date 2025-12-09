@@ -100,7 +100,7 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
                 elif not enable_ocr:
                     # 不启用OCR时直接写入空数据
                     with db_lock:
-                        db.update_image_data(
+                        self.db.update_image_data(
                             image_id=img_id,
                             ocr_text='',
                             filtered_text='',
@@ -113,7 +113,7 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
                             hsv_v=None,
                             hue_idx=None,
                             lightness=None,
-                            histogram=None
+                            dl_features=None
                         )
                     
                     result = {
@@ -147,7 +147,7 @@ def _process_images_in_subprocess(image_list, enable_ocr, enable_sentiment, use_
                             hsv_v=ocr_result.get('hsv_v'),
                             hue_idx=ocr_result.get('hue_idx'),
                             lightness=ocr_result.get('lightness'),
-                            histogram=ocr_result.get('histogram')
+                            dl_features=ocr_result.get('dl_features')
                         )
                     
                     result = {
@@ -314,7 +314,7 @@ def _process_image_worker(img_info, enable_ocr, enable_sentiment, use_gpu, db_pa
                 hsv_v=None,
                 hue_idx=None,
                 lightness=None,
-                histogram=None
+                dl_features=None
             )
             db.close()
             
@@ -361,11 +361,11 @@ def _process_image_worker(img_info, enable_ocr, enable_sentiment, use_gpu, db_pa
             neg_score=result['emotion_negative'],
             phash=result.get('phash'),
             hsv_h=result.get('hsv_h'),
-            hsv_s=result.get('hsv_v'),
+            hsv_s=result.get('hsv_s'),
             hsv_v=result.get('hsv_v'),
             hue_idx=result.get('hue_idx'),
             lightness=result.get('lightness'),
-            histogram=result.get('histogram')
+            dl_features=result.get('dl_features')
         )
         db.close()
         

@@ -91,17 +91,19 @@ class SearchTab:
         ttk.Label(search_frame, text="图源:").grid(row=1, column=2, sticky=tk.W, padx=5, pady=5)
         self.source_dropdown = CheckboxDropdown(
             search_frame, [], default_text="全部图源",
-            callback=self._on_source_filter_change, width=25
+            callback=self._on_source_filter_change, width=15
         )
         self.source_dropdown.grid(row=1, column=3, sticky=tk.W, padx=5, pady=5)
         
-        # 标签筛选
-        ttk.Label(search_frame, text="标签:").grid(row=1, column=4, sticky=tk.W, padx=5, pady=5)
+        # 标签筛选（使用小 Frame 控制间距，避免 grid 列被拉宽）
+        tag_frame = ttk.Frame(search_frame)
+        tag_frame.grid(row=1, column=4, columnspan=2, sticky=tk.W, padx=(5,0), pady=5)
+        ttk.Label(tag_frame, text="标签:").pack(side=tk.LEFT)
         self.tag_dropdown = CheckboxDropdown(
-            search_frame, [], default_text="全部标签",
-            callback=self._on_tag_filter_change, width=20
+            tag_frame, [], default_text="全部标签",
+            callback=self._on_tag_filter_change, width=15
         )
-        self.tag_dropdown.grid(row=1, column=5, sticky=tk.W, padx=5, pady=5)
+        self.tag_dropdown.pack(side=tk.LEFT, padx=(5,0))
         
         # 收藏筛选
         self.favorite_filter_var = tk.BooleanVar(value=False)
@@ -136,6 +138,11 @@ class SearchTab:
         
         # 相似度排序的参考图片
         self.similarity_reference = None
+        
+        # 以图搜图权重配置（默认值）
+        self.dl_weight = 0.8  # 深度学习特征权重
+        self.phash_weight = 0.2  # PHash权重
+        self._load_similarity_weights()  # 从配置文件加载
         
         self._load_sources()
         self._load_tags()
@@ -338,6 +345,12 @@ class SearchTab:
         """刷新页面"""
         self._load_sources()
         self._load_tags()
+        # 清除排序提示，重置为默认状态
+        self.similarity_reference = None
+        self.sort_info_label.config(
+            text="(右键图片可选择'以此为参考排序')",
+            foreground="gray"
+        )
         self.load_page()
         # 刷新详情面板（如果正在显示某张图片）
         self.detail_panel.refresh()
@@ -350,6 +363,10 @@ class SearchTab:
             except:
                 pass
             self._reload_after_id = None
+        
+        # 清除排序参考和提示
+        self.similarity_reference = None
+        self.sort_info_label.config(text="", foreground="black")
         
         page = max(1, int(self.page_var.get()))
         page_size = int(self.page_size_var.get())
@@ -615,7 +632,9 @@ class SearchTab:
         self._render_visible_items()
     
     def _sort_by_similarity_reference(self, reference_path: str):
-        """以指定图片为参考进行相似度排序
+        """以指定图片为参考进行相似度排序（支持DL特征 + PHash）
+        
+        优先使用数据库中已有的特征，如果不存在则重新计算
         
         Args:
             reference_path: 参考图片的文件路径
@@ -623,40 +642,100 @@ class SearchTab:
         if not self.all_results:
             return
         
-        # 找到参考图片
-        reference_image = None
-        for img in self.all_results:
-            if img.get('file_path') == reference_path:
-                reference_image = img
-                break
-        
-        if not reference_image:
-            messagebox.showwarning("提示", "未找到参考图片")
-            return
-        
-        if not reference_image.get('phash'):
-            messagebox.showwarning("提示", "参考图片缺少PHash数据，请先处理该图片")
-            return
-        
-        # 保存参考图片
-        self.similarity_reference = reference_image
-        
-        # 按相似度排序
-        self.all_results = ImageSorter.sort_by_similarity(self.all_results, reference_image)
-        
-        # 更新排序说明
-        from pathlib import Path
-        ref_name = Path(reference_path).name
-        self.sort_info_label.config(
-            text=f"(已按与 {ref_name} 的相似度排序)",
-            foreground="green"
-        )
-        
-        # 重新渲染
-        self.renderer.clear_all()
-        self._render_visible_items()
-        
-        messagebox.showinfo("成功", f"已按与 {ref_name} 的相似度排序")
+        try:
+            from pathlib import Path
+            from ...core.image_hash import calculate_image_hashes, calculate_dl_features
+            
+            image_path = Path(reference_path)
+            if not image_path.exists():
+                messagebox.showerror("错误", "参考图片不存在")
+                return
+            
+            # 先尝试从all_results中找到该图片的数据（优先使用数据库特征）
+            reference_image = None
+            for img in self.all_results:
+                if img.get('file_path') == reference_path:
+                    reference_image = img.copy()  # 复制一份
+                    break
+            
+            # 如果数据库中有特征，直接使用
+            if reference_image and reference_image.get('phash'):
+                logger.info("使用数据库中的特征进行相似度排序")
+                dl_features = reference_image.get('dl_features')
+            else:
+                # 否则重新计算特征
+                logger.info("数据库中无特征，重新计算...")
+                phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v = calculate_image_hashes(image_path)
+                
+                # 尝试计算深度学习特征
+                dl_features = None
+                try:
+                    dl_features = calculate_dl_features(image_path)
+                    if dl_features:
+                        logger.info("✓ 成功提取深度学习特征用于相似度排序")
+                except Exception as e:
+                    logger.debug(f"深度学习特征提取失败（使用PHash备用方案）: {e}")
+                
+                # 构建参考图片对象
+                reference_image = {
+                    'file_path': str(image_path),
+                    'phash': phash,
+                    'color_hue_idx': hue_idx,
+                    'color_lightness': lightness,
+                    'hsv_h': hsv_h,
+                    'hsv_s': hsv_s,
+                    'hsv_v': hsv_v,
+                    'dl_features': dl_features
+                }
+            
+            # 保存参考图片
+            self.similarity_reference = reference_image
+            
+            # 选择排序方法
+            dl_features = reference_image.get('dl_features')
+            phash = reference_image.get('phash')
+            
+            # 优先使用混合方法，只要有DL特征且权重不为0，或有PHash且权重不为0
+            if dl_features and (self.dl_weight > 0 or (phash and self.phash_weight > 0)):
+                # 使用混合相似度排序（使用配置的权重）
+                self.all_results = ImageSorter.sort_by_hybrid_similarity(
+                    self.all_results, reference_image,
+                    dl_weight=self.dl_weight, phash_weight=self.phash_weight
+                )
+                sort_method = f"混合相似度 [深度学习:{int(self.dl_weight*100)}% + PHash:{int(self.phash_weight*100)}%]"
+            elif dl_features:
+                # 只有深度学习特征
+                self.all_results = ImageSorter.sort_by_dl_similarity(
+                    self.all_results, reference_image
+                )
+                sort_method = "深度学习特征相似度"
+            elif phash:
+                # 只有PHash特征
+                self.all_results = ImageSorter.sort_by_similarity(
+                    self.all_results, reference_image
+                )
+                sort_method = "PHash相似度"
+            else:
+                # 无特征可用
+                messagebox.showwarning("警告", "参考图片缺少特征数据，无法排序")
+                return
+            
+            # 更新排序说明
+            ref_name = image_path.name
+            self.sort_info_label.config(
+                text=f"（已按与 {ref_name} 的相似度排序）",
+                foreground="green"
+            )
+            
+            # 重新渲染
+            self.renderer.clear_all()
+            self._render_visible_items()
+            
+            messagebox.showinfo("成功", f"已按与 {ref_name} 的相似度排序\n使用：{sort_method}")
+            
+        except Exception as e:
+            logger.error(f"相似度排序失败: {e}")
+            messagebox.showerror("错误", f"相似度排序失败：{e}")
     
     def _search_by_image(self):
         """以图搜图（支持文件选择和剪贴板）"""
@@ -664,10 +743,10 @@ class SearchTab:
         from PIL import ImageGrab
         import tempfile
         
-        # 创建选择对话框
+        # 创建选择对话框（加入设置按钮）
         choice_dialog = tk.Toplevel(self.frame)
-        choice_dialog.title("选择图片来源")
-        choice_dialog.geometry("300x150")
+        choice_dialog.title("以图搜图")
+        choice_dialog.geometry("350x220")
         choice_dialog.transient(self.frame)
         choice_dialog.grab_set()
         
@@ -710,16 +789,43 @@ class SearchTab:
             except Exception as e:
                 messagebox.showerror("错误", f"从剪贴板获取图片失败：{e}")
         
-        # 按钮
-        ttk.Label(choice_dialog, text="请选择图片来源：", font=('TkDefaultFont', 10)).pack(pady=20)
+        def open_settings():
+            """打开设置"""
+            from .similarity_settings_dialog import SimilaritySettingsDialog
+            
+            dialog = SimilaritySettingsDialog(
+                choice_dialog,
+                current_dl_weight=self.dl_weight,
+                current_phash_weight=self.phash_weight
+            )
+            
+            result = dialog.wait_window()
+            
+            if result:
+                self.dl_weight, self.phash_weight = result
+                # 保存权重设置
+                self._save_similarity_weights()
+                # 更新按钮文本显示当前权重
+                settings_text = f"⚙️ 权重设置 (DL:{int(self.dl_weight*100)}% PHash:{int(self.phash_weight*100)}%)"
+                settings_btn.config(text=settings_text)
         
+        # 标题
+        ttk.Label(choice_dialog, text="请选择图片来源：", font=('TkDefaultFont', 11, 'bold')).pack(pady=15)
+        
+        # 按钮框架
         btn_frame = ttk.Frame(choice_dialog)
         btn_frame.pack(pady=10)
         
-        ttk.Button(btn_frame, text="📁 从文件选择", command=select_from_file, width=15).pack(side=tk.LEFT, padx=10)
-        ttk.Button(btn_frame, text="📋 从剪贴板", command=select_from_clipboard, width=15).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="📁 从文件选择", command=select_from_file, width=18).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="📋 从剪贴板", command=select_from_clipboard, width=18).pack(side=tk.LEFT, padx=10)
         
-        ttk.Button(choice_dialog, text="取消", command=choice_dialog.destroy).pack(pady=10)
+        # 设置按钮
+        settings_text = f"⚙️ 权重设置 (DL:{int(self.dl_weight*100)}% PHash:{int(self.phash_weight*100)}%)"
+        settings_btn = ttk.Button(choice_dialog, text=settings_text, command=open_settings, width=40)
+        settings_btn.pack(pady=15)
+        
+        # 取消按钮
+        ttk.Button(choice_dialog, text="取消", command=choice_dialog.destroy, width=15).pack(pady=10)
         
         # 等待对话框关闭
         self.frame.wait_window(choice_dialog)
@@ -740,7 +846,17 @@ class SearchTab:
             
             # 计算特征
             messagebox.showinfo("提示", "正在计算图片特征，请稍候...")
-            phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v, histogram_bytes = calculate_image_hashes(image_path)
+            phash, hue_idx, lightness, hsv_h, hsv_s, hsv_v = calculate_image_hashes(image_path)
+            
+            # 尝试计算深度学习特征
+            dl_features = None
+            try:
+                from ...core.image_hash import calculate_dl_features
+                dl_features = calculate_dl_features(image_path)
+                if dl_features:
+                    logger.info("✓ 成功提取深度学习特征用于以图搜图")
+            except:
+                pass
             
             # 构建参考图片对象
             reference_image = {
@@ -751,18 +867,51 @@ class SearchTab:
                 'hsv_h': hsv_h,
                 'hsv_s': hsv_s,
                 'hsv_v': hsv_v,
-                'color_histogram': histogram_bytes
+                'dl_features': dl_features
             }
             
             if not self.all_results:
                 messagebox.showwarning("提示", "当前没有搜索结果")
                 return
             
-            # 按综合相似度排序（PHash 60% + 直方图 40%）
-            self.all_results = ImageSorter.sort_by_combined_similarity(
-                self.all_results, reference_image,
-                phash_weight=0.6, histogram_weight=0.4
-            )
+            # 选择排序方法
+            # 优先使用混合方法，只要有DL特征且权重不为0，或有PHash且权重不为0
+            if dl_features and (self.dl_weight > 0 or (phash and self.phash_weight > 0)):
+                # 使用混合相似度排序（使用配置的权重）
+                print(f"[DEBUG] 排序前总数: {len(self.all_results)}")
+                print(f"[DEBUG] 权重: DL={self.dl_weight}, PHash={self.phash_weight}")
+                print(f"[DEBUG] 参考图片特征: dl_features={dl_features is not None}, phash={phash}")
+                
+                self.all_results = ImageSorter.sort_by_hybrid_similarity(
+                    self.all_results, reference_image,
+                    dl_weight=self.dl_weight, phash_weight=self.phash_weight
+                )
+                
+                print(f"[DEBUG] 排序后总数: {len(self.all_results)}")
+                sort_method = f"混合相似度 [深度学习:{int(self.dl_weight*100)}% + PHash:{int(self.phash_weight*100)}%]"
+            elif dl_features:
+                # 只有深度学习特征
+                self.all_results = ImageSorter.sort_by_dl_similarity(
+                    self.all_results, reference_image
+                )
+                sort_method = "深度学习特征相似度"
+            elif phash:
+                # 只有PHash特征
+                self.all_results = ImageSorter.sort_by_similarity(
+                    self.all_results, reference_image
+                )
+                sort_method = "PHash相似度"
+            else:
+                messagebox.showwarning("警告", "参考图片缺少特征数据，无法排序")
+                return
+            
+            # 调试：打印排序后的前5个结果
+            print("\n[DEBUG] 排序后的前5个结果:")
+            from pathlib import Path
+            for i, item in enumerate(self.all_results[:5]):
+                score = item.get('similarity_score', 0)
+                name = Path(item.get('file_path', 'unknown')).name
+                print(f"  {i+1}. {name} -> 相似度: {score:.4f}")
             
             # 保存参考图片
             self.similarity_reference = reference_image
@@ -770,17 +919,88 @@ class SearchTab:
             # 更新排序说明
             img_name = image_path.name
             self.sort_info_label.config(
-                text=f"(已按与 {img_name} 的综合相似度排序)",
+                text=f"(已按与 {img_name} 的相似度排序)",
                 foreground="blue"
             )
             
-            # 重新渲染
+            # 重新渲染（修复排序不生效的bug）
             self.renderer.clear_all()
             self._render_visible_items()
             
-            messagebox.showinfo("成功", f"已按与 {img_name} 的相似度排序\n使用：PHash(60%) + 直方图(40%)")
+            # 强制更新画布
+            self.renderer.canvas.update_idletasks()
+            
+            messagebox.showinfo("成功", f"已按与 {img_name} 的相似度排序\n使用：{sort_method}")
             
         except Exception as e:
             logger.error(f"以图搜图失败: {e}")
             messagebox.showerror("错误", f"以图搜图失败：{e}")
+    
+    def _open_similarity_settings(self):
+        """打开以图搜图权重设置对话框"""
+        from .similarity_settings_dialog import SimilaritySettingsDialog
+        
+        dialog = SimilaritySettingsDialog(
+            self.frame.winfo_toplevel(),
+            current_dl_weight=self.dl_weight,
+            current_phash_weight=self.phash_weight
+        )
+        
+        result = dialog.wait_window()
+        
+        if result:
+            self.dl_weight, self.phash_weight = result
+            messagebox.showinfo(
+                "设置已保存",
+                f"以图搜图权重已更新：\n"
+                f"深度学习: {int(self.dl_weight*100)}%\n"
+                f"PHash: {int(self.phash_weight*100)}%"
+            )
+            # 保存权重设置
+            self._save_similarity_weights()
+    
+    def _load_similarity_weights(self):
+        """从配置文件加载以图搜图权重"""
+        try:
+            import json
+            from pathlib import Path
+            
+            config_path = Path(__file__).parent.parent.parent / 'version_config.json'
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    self.dl_weight = config.get('dl_weight', 0.8)
+                    self.phash_weight = config.get('phash_weight', 0.2)
+                    logger.debug(f"已加载权重设置: DL={self.dl_weight}, PHash={self.phash_weight}")
+        except Exception as e:
+            logger.warning(f"加载权重设置失败，使用默认值: {e}")
+    
+    def _save_similarity_weights(self):
+        """保存以图搜图权重到配置文件"""
+        try:
+            import json
+            from pathlib import Path
+            
+            config_path = Path(__file__).parent.parent.parent / 'version_config.json'
+            
+            # 读取现有配置
+            config = {}
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            
+            # 更新权重
+            config['dl_weight'] = self.dl_weight
+            config['phash_weight'] = self.phash_weight
+            
+            # 保存
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+            
+            logger.info(f"权重设置已保存: DL={self.dl_weight}, PHash={self.phash_weight}")
+        except Exception as e:
+            logger.error(f"保存权重设置失败: {e}")
+
+
+
 

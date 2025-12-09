@@ -123,13 +123,13 @@ class ImageManager:
                          phash: str = None, hsv_h: int = None,
                          hsv_s: int = None, hsv_v: int = None,
                          hue_idx: int = None, lightness: int = None, 
-                         histogram: bytes = None):
-        """更新图片处理结果（包括哈希值、HSV数据和K-Means颜色特征）
+                         dl_features: bytes = None):
+        """更新图片处理结果（包括哈希值、HSV数据、K-Means颜色特征和深度学习特征）
         
         Args:
             hue_idx: 色相索引 (0=灰色, 1-12=颜色分段)
             lightness: 明度 (0-100)
-            histogram: RGB直方图 (16x16x16 bins, float32 序列化)
+            dl_features: 深度学习特征向量 (1000维, float32 序列化)
         """
         with self.get_cursor(commit=True) as cursor:
             cursor.execute("""
@@ -137,11 +137,13 @@ class ImageManager:
                 SET ocr_text = ?, filtered_text = ?, emotion = ?,
                     emotion_positive = ?, emotion_negative = ?, processed = 1,
                     phash = ?, hsv_h = ?, hsv_s = ?, hsv_v = ?,
-                    color_hue_idx = ?, color_lightness = ?, color_histogram = ?
+                    color_hue_idx = ?, color_lightness = ?,
+                    dl_features = ?
                 WHERE id = ?
             """, (ocr_text, filtered_text, emotion, pos_score, neg_score, 
-                  phash, hsv_h, hsv_s, hsv_v, hue_idx, lightness, histogram, image_id))
-        logger.debug(f"更新图片数据: ID={image_id}, 情绪={emotion}, 色相索引={hue_idx}")
+                  phash, hsv_h, hsv_s, hsv_v, hue_idx, lightness, 
+                  dl_features, image_id))
+        logger.debug(f"更新图片数据: ID={image_id}, 情绪={emotion}, 色相索引={hue_idx}, DL特征={'有' if dl_features else '无'}")
     
     def update_images_batch(self, updates: List[Tuple]) -> int:
         """批量更新图片数据
