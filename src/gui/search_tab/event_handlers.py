@@ -238,6 +238,14 @@ class EventHandlers:
     
     def open_folder(self, file_path):
         """打开文件所在文件夹"""
+        if not file_path:
+            return
+            
+        # 确保是绝对路径并使用正确的分隔符
+        file_path = os.path.abspath(file_path)
+        if sys.platform.startswith('win'):
+            file_path = file_path.replace('/', '\\')
+            
         folder = os.path.dirname(file_path)
         try:
             if sys.platform.startswith('win'):
