@@ -33,13 +33,55 @@ class SourceTab:
         btn_frame = ttk.Frame(self.frame)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        ttk.Button(btn_frame, text="➕ 添加图源文件夹", 
+        # 载入图标（优先从项目 assets/ 目录）
+        self.menu_icons = {}
+        try:
+            assets_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'assets'))
+            # 图标文件名基名到功能映射（不含扩展名）
+            icon_map = {
+                'view': '相册',
+                'folder': '文件夹',
+                'scan': '查找',
+                'toggle': '启用',
+                'delete': '删除',
+                'refresh': '刷新',
+                'add': '添加'
+            }
+
+            # 选择合适的重采样常量
+            try:
+                resample = Image.Resampling.LANCZOS
+            except Exception:
+                resample = Image.ANTIALIAS
+
+            for key, name_base in icon_map.items():
+                # 优先尝试 PNG，其次尝试 ICO，保持兼容性
+                candidates = [f"{name_base}.png", f"{name_base}.ico"]
+                loaded = None
+                for cand in candidates:
+                    fpath = os.path.join(assets_dir, cand)
+                    if os.path.exists(fpath):
+                        try:
+                            img = Image.open(fpath)
+                            img = img.convert('RGBA')
+                            img = img.resize((16, 16), resample)
+                            loaded = ImageTk.PhotoImage(img)
+                            break
+                        except Exception:
+                            loaded = None
+                            continue
+                self.menu_icons[key] = loaded
+        except Exception:
+            # 任何问题都回退为无图标文本菜单
+            self.menu_icons = {k: None for k in ('view', 'folder', 'scan', 'toggle', 'delete')}
+        
+        ttk.Button(btn_frame, text=" 添加图源文件夹", image=self.menu_icons.get('add'), compound='left',
                   command=self.add_source).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="🗑️ 删除选中", 
+        ttk.Button(btn_frame, text=" 删除选中", image=self.menu_icons.get('delete'), compound='left',
                   command=self.remove_source).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="🔄 刷新列表", 
+        ttk.Button(btn_frame, text=" 刷新列表", image=self.menu_icons.get('refresh'), compound='left',
                   command=self.refresh_sources).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="🔍 扫描新图片", 
+        ttk.Button(btn_frame, text=" 扫描新图片", image=self.menu_icons.get('scan'), compound='left',
                   command=self.scan_sources).pack(side=tk.LEFT, padx=5)
         
         # 图源列表
@@ -70,46 +112,6 @@ class SourceTab:
         
         # 右键菜单（使用小图标 + 文本，保证对齐）
         self.source_menu = tk.Menu(self.frame, tearoff=0)
-
-        # 载入图标（优先从项目 assets/ 目录）
-        self.menu_icons = {}
-        try:
-            assets_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'assets'))
-            # 图标文件名基名到功能映射（不含扩展名）
-            icon_map = {
-                'view': '相册',
-                'folder': '文件夹',
-                'scan': '查找',
-                'toggle': '启用',
-                'delete': '删除'
-            }
-
-            # 选择合适的重采样常量
-            try:
-                resample = Image.Resampling.LANCZOS
-            except Exception:
-                resample = Image.ANTIALIAS
-
-            for key, name_base in icon_map.items():
-                # 优先尝试 PNG，其次尝试 ICO，保持兼容性
-                candidates = [f"{name_base}.png", f"{name_base}.ico"]
-                loaded = None
-                for cand in candidates:
-                    fpath = os.path.join(assets_dir, cand)
-                    if os.path.exists(fpath):
-                        try:
-                            img = Image.open(fpath)
-                            img = img.convert('RGBA')
-                            img = img.resize((16, 16), resample)
-                            loaded = ImageTk.PhotoImage(img)
-                            break
-                        except Exception:
-                            loaded = None
-                            continue
-                self.menu_icons[key] = loaded
-        except Exception:
-            # 任何问题都回退为无图标文本菜单
-            self.menu_icons = {k: None for k in ('view', 'folder', 'scan', 'toggle', 'delete')}
 
         # 添加菜单项（使用 image + compound 保证图标左侧显示，文本对齐）
         if self.menu_icons.get('view'):

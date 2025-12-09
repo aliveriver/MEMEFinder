@@ -5,8 +5,10 @@
 """
 
 import gc
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox
+from PIL import Image, ImageTk
 
 from ...core.database import ImageDatabase
 from ...core.database.image_sorter import ImageSorter
@@ -43,9 +45,53 @@ class SearchTab:
         self._scroll_after_id = None
         self._configure_after_id = None
         
+        # 加载图标
+        self._load_icons()
+        
         # 创建主框架
         self.frame = ttk.Frame(parent)
         self.create_widgets()
+    
+    def _load_icons(self):
+        """加载图标（优先从项目 assets/ 目录）"""
+        self.icons = {}
+        try:
+            assets_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..','..', 'assets'))
+            # 图标文件名到功能映射
+            icon_map = {
+                'favorite': '收藏.ico',
+                'unfavorite': '取消收藏.ico',
+                'tag': '标签.ico',
+                'emotion': '情感.ico',
+                'search': '查找.png',
+                'delete': '删除.png',
+                'image': '图片.ico',
+                'folder': '文件夹.png',
+                'refresh': '刷新.ico'
+            }
+            
+            # 选择合适的重采样常量
+            try:
+                resample = Image.Resampling.LANCZOS
+            except Exception:
+                resample = Image.ANTIALIAS
+            
+            for key, filename in icon_map.items():
+                fpath = os.path.join(assets_dir, filename)
+                if os.path.exists(fpath):
+                    try:
+                        img = Image.open(fpath)
+                        img = img.convert('RGBA')
+                        img = img.resize((16, 16), resample)
+                        self.icons[key] = ImageTk.PhotoImage(img)
+                    except Exception as e:
+                        logger.debug(f"加载图标失败 {filename}: {e}")
+                        self.icons[key] = None
+                else:
+                    self.icons[key] = None
+        except Exception as e:
+            logger.warning(f"加载图标时出错: {e}")
+            self.icons = {k: None for k in ('favorite', 'unfavorite', 'tag', 'emotion', 'search', 'delete', 'image', 'folder', 'refresh')}
     
     def create_widgets(self):
         """创建界面组件"""
@@ -73,10 +119,26 @@ class SearchTab:
         keyword_entry.grid(row=0, column=1, columnspan=3, sticky=tk.W, padx=5, pady=5)
         keyword_entry.bind('<Return>', lambda e: self.search_images())
         
-        ttk.Button(search_frame, text="🔍 搜索", command=self.search_images).grid(row=0, column=4, padx=5)
-        ttk.Button(search_frame, text="🔄 刷新", command=self.refresh_page).grid(row=0, column=5, padx=5)
-        ttk.Button(search_frame, text="🖼️ 以图搜图", command=self._search_by_image).grid(row=0, column=6, padx=5)
-        ttk.Button(search_frame, text="🔖 管理标签", command=self._open_tag_manager).grid(row=0, column=7, padx=5)
+        # 按钮（带图标）
+        search_btn = ttk.Button(search_frame, text=" 搜索", image=self.icons.get('search'), compound=tk.LEFT, command=self.search_images)
+        search_btn.grid(row=0, column=4, padx=5)
+        if self.icons.get('search'):
+            search_btn.image = self.icons['search']  # 保持引用
+        
+        refresh_btn = ttk.Button(search_frame, text=" 刷新", image=self.icons.get('refresh'), compound=tk.LEFT, command=self.refresh_page)
+        refresh_btn.grid(row=0, column=5, padx=5)
+        if self.icons.get('refresh'):
+            refresh_btn.image = self.icons['refresh']  # 保持引用
+        
+        image_search_btn = ttk.Button(search_frame, text=" 以图搜图", image=self.icons.get('image'), compound=tk.LEFT, command=self._search_by_image)
+        image_search_btn.grid(row=0, column=6, padx=5)
+        if self.icons.get('image'):
+            image_search_btn.image = self.icons['image']
+        
+        tag_manage_btn = ttk.Button(search_frame, text=" 管理标签", image=self.icons.get('tag'), compound=tk.LEFT, command=self._open_tag_manager)
+        tag_manage_btn.grid(row=0, column=7, padx=5)
+        if self.icons.get('tag'):
+            tag_manage_btn.image = self.icons['tag']
         
         # 情感筛选
         ttk.Label(search_frame, text="情绪:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
@@ -108,7 +170,8 @@ class SearchTab:
         # 收藏筛选
         self.favorite_filter_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
-            search_frame, text="❤ 只看收藏",
+            search_frame, text=" 只看收藏",
+            image=self.icons.get('favorite'), compound='left',
             variable=self.favorite_filter_var,
             command=self._on_favorite_filter_change
         ).grid(row=1, column=6, sticky=tk.W, padx=5, pady=5)
@@ -212,7 +275,8 @@ class SearchTab:
             get_selected_items_func=lambda: self.selected_items,
             get_favorite_cache_func=lambda: self.favorite_cache,
             refresh_callback=self.refresh_page,
-            sort_by_similarity_callback=self._sort_by_similarity_reference
+            sort_by_similarity_callback=self._sort_by_similarity_reference,
+            icons=self.icons
         )
         
         # 将上下文菜单附加到事件处理器
