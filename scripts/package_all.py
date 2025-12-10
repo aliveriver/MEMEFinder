@@ -66,7 +66,7 @@ def generate_spec(version_name, console=False):
         'unittest', 'unittest.mock', 'doctest',
         'rapidocr_onnxruntime', 'onnxruntime',
         'snownlp', 'cv2', 'PIL', 'numpy', 
-        'tkinter', 'sqlite3', 'flask', 'flask_cors',
+        'tkinter', 'sqlite3',
         'pypdfium2', 'pyclipper', 'shapely', 'imgaug',
         # 不包含sklearn（太大），颜色聚类已用纯numpy实现
     ]
