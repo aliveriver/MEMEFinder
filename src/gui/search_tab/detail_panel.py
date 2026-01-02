@@ -254,13 +254,27 @@ class DetailPanel:
         path_text.pack(fill=tk.X, pady=2)
         detail_widgets.bind_mousewheel(path_text, self._on_mousewheel)
         
+        # 按钮容器
+        btn_container = ttk.Frame(path_frame)
+        btn_container.pack(pady=2)
+        detail_widgets.bind_mousewheel(btn_container, self._on_mousewheel)
+        
         open_folder_btn = ttk.Button(
-            path_frame,
+            btn_container,
             text="📁 在资源管理器中打开",
             command=lambda: self.open_folder_callback(file_path)
         )
-        open_folder_btn.pack(pady=2)
+        open_folder_btn.pack(side=tk.LEFT, padx=(0, 5))
         detail_widgets.bind_mousewheel(open_folder_btn, self._on_mousewheel)
+        
+        # 复制到剪切板按钮
+        copy_btn = ttk.Button(
+            btn_container,
+            text="📋 复制图片",
+            command=lambda: self._copy_image_to_clipboard(file_path)
+        )
+        copy_btn.pack(side=tk.LEFT)
+        detail_widgets.bind_mousewheel(copy_btn, self._on_mousewheel)
         
         # 时间信息
         try:
@@ -481,3 +495,8 @@ class DetailPanel:
         """保存情绪修改"""
         new_emotion = self.emotion_var.get()
         self.on_emotion_save(file_path, new_emotion)
+    
+    def _copy_image_to_clipboard(self, file_path: str):
+        """复制图片到剪切板"""
+        from ...utils.clipboard_helper import copy_image_to_clipboard
+        copy_image_to_clipboard(file_path, self.parent_frame.winfo_toplevel())

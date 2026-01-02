@@ -18,3 +18,4 @@ textblob>=0.17.1    # 英文情感分析
 psutil>=5.9.0       # 系统资源监控
 requests>=2.31.0    # 网络请求（用于下载模型等）
 pyinstaller>=6.0.0  # 打包工具
+pywin32>=305        # Windows系统API（用于剪切板等功能）
