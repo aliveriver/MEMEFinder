@@ -103,6 +103,13 @@ class ContextMenu:
             command=lambda: self._batch_edit_emotion(selected_items)
         )
         
+        # 复制到剪切板
+        self.menu.add_command(
+            label=" 复制到剪切板",
+            compound='left',
+            command=lambda: self._copy_to_clipboard(selected_items)
+        )
+        
         # 转移到图源
         self.menu.add_command(
             label=" 转移到图源",
@@ -209,6 +216,11 @@ class ContextMenu:
             callback=self.refresh_callback
         )
         dialog.wait_window()
+    
+    def _copy_to_clipboard(self, items: Set[str]):
+        """复制图片到剪切板"""
+        from ...utils.clipboard_helper import copy_images_to_clipboard_batch
+        copy_images_to_clipboard_batch(list(items), self.parent.winfo_toplevel())
     
     def _batch_delete(self, items: Set[str]):
         """批量删除"""
